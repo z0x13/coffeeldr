@@ -57,7 +57,7 @@ checksum = "9555578bc9e57714c812a1f84e4fc5b4d21fcb063490c624de019f7464c91268"
 
 [[package]]
 name = "coffeeldr"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "binrw",
  "dinvk",
@@ -72,9 +72,9 @@ dependencies = [
 
 [[package]]
 name = "dinvk"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f03a44cfde2fcf79424fd55b6ade1109d74c2c236dfb30e87a662537630ff4b"
+checksum = "0ddcae11e0e69466a318b2ca7e9e8c0ddf3ccdb7d282ca2dbdf263ba4e0a4e19"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -128,9 +128,9 @@ checksum = "d0d354e9a302760d07e025701d40534f17dd1fe4c4db955b4e3bd2907c63bdee"
 
 [[package]]
 name = "printf-compat"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e78f042367167d3ee849d7c9f0a95db06730a10ea056619d5f215d13db8e947"
+checksum = "4ccd7bb33c3c13016f1315e4e4c6ad1d0021ce575b1e254868f4330eab99e1b6"
 dependencies = [
  "bitflags",
  "itertools",
