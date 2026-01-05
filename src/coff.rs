@@ -1,6 +1,6 @@
 //! COFF parsing utilities for the CoffeeLdr loader.
 
-use core::ffi::{CStr, c_void};
+use core::ffi::c_void;
 use alloc::{
     string::{String, ToString},
     vec::Vec,
@@ -151,7 +151,9 @@ impl<'a> Coff<'a> {
             .fold(length, |mut total_length, section| {
                 let relocations = self.get_relocations(section);
                 relocations.iter().for_each(|relocation| {
-                    let sym = &self.symbols[relocation.SymbolTableIndex as usize];
+                    let Some(sym) = self.symbols.get(relocation.SymbolTableIndex as usize) else {
+                        return;
+                    };
                     let name = self.get_symbol_name(sym);
                     if name.starts_with("__imp_") {
                         total_length += size_of::<*const c_void>();
@@ -193,24 +195,25 @@ impl<'a> Coff<'a> {
 
     /// Reads the symbol name, handling short names and long names from the string table.
     pub fn get_symbol_name(&self, symtbl: &IMAGE_SYMBOL) -> String {
-        unsafe {
-            let name = if symtbl.N.ShortName[0] != 0 {
+        let name = unsafe {
+            if symtbl.N.ShortName[0] != 0 {
                 String::from_utf8_lossy(&symtbl.N.ShortName).into_owned()
             } else {
                 let long_name_offset = symtbl.N.Name.Long as usize;
                 let string_table_offset = self.file_header.PointerToSymbolTable as usize
                     + self.file_header.NumberOfSymbols as usize * size_of::<IMAGE_SYMBOL>();
 
-                // Retrieve the name from the string table
                 let offset = string_table_offset + long_name_offset;
-                let name_ptr = &self.buffer[offset] as *const u8;
-                CStr::from_ptr(name_ptr.cast())
-                    .to_string_lossy()
-                    .into_owned()
-            };
+                let Some(name_bytes) = self.buffer.get(offset..) else {
+                    return String::new();
+                };
 
-            name.trim_end_matches('\0').to_string()
-        }
+                let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
+                String::from_utf8_lossy(&name_bytes[..end]).into_owned()
+            }
+        };
+
+        name.trim_end_matches('\0').to_string()
     }
 
     /// Rounds a value up to the next page boundary.

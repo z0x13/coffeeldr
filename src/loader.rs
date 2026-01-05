@@ -193,7 +193,12 @@ impl<'a> CoffeeLdr<'a> {
             if name == entry && Coff::is_fcn(symbol.Type) {
                 info!("Running COFF file: entry point = {}, args = {:?}, argc = {:?}", name, args, argc);
 
-                let section_addr = self.section_map[(symbol.SectionNumber - 1) as usize].base;
+                let section_idx = symbol.SectionNumber.checked_sub(1)
+                    .and_then(|idx| usize::try_from(idx).ok())
+                    .filter(|&idx| idx < self.section_map.len())
+                    .ok_or_else(|| CoffeeLdrError::InvalidSymbolFormat(name.clone()))?;
+
+                let section_addr = self.section_map[section_idx].base;
                 let entrypoint = unsafe { section_addr.offset(symbol.Value as isize) };
                 let coff_main: CoffMain = unsafe { transmute(entrypoint) };
                 coff_main(args.unwrap_or(null_mut()), argc.unwrap_or(0));
@@ -674,7 +679,8 @@ impl<'a> CoffRelocation<'a> {
             let relocations = self.coff.get_relocations(section);
             for relocation in relocations.iter() {
                 // Look up the symbol associated with the relocation
-                let symbol = &self.coff.symbols[relocation.SymbolTableIndex as usize];
+                let symbol = self.coff.symbols.get(relocation.SymbolTableIndex as usize)
+                    .ok_or(CoffError::InvalidCoffSymbolsFile)?;
 
                 // Compute the address where the relocation should be applied
                 let symbol_reloc_addr = (self.section_map[i].base as usize 
@@ -761,7 +767,12 @@ impl<'a> CoffRelocation<'a> {
                 }
             }
 
-            let section_addr = self.section_map[(symbol.SectionNumber - 1) as usize].base;
+            let section_idx = symbol.SectionNumber.checked_sub(1)
+                .and_then(|idx| usize::try_from(idx).ok())
+                .filter(|&idx| idx < self.section_map.len())
+                .ok_or(CoffeeLdrError::InvalidRelocationType(relocation.Type))?;
+
+            let section_addr = self.section_map[section_idx].base;
             match self.coff.arch {
                 CoffMachine::X64 => {
                     match relocation.Type as u32 {
