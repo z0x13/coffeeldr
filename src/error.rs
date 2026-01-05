@@ -94,10 +94,6 @@ pub enum CoffeeLdrError {
     /// Missing base address during module stomping.
     #[error("missing base address for target section")]
     MissingStompingBaseAddress,
-
-    /// Invalid section index.
-    #[error("invalid section index: {0}")]
-    InvalidSectionIndex(usize),
 }
 
 /// Represents specific errors during COFF parsing or validation.

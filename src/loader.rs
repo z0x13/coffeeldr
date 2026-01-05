@@ -193,12 +193,8 @@ impl<'a> CoffeeLdr<'a> {
             if name == entry && Coff::is_fcn(symbol.Type) {
                 info!("Running COFF file: entry point = {}, args = {:?}, argc = {:?}", name, args, argc);
 
-                let section_idx = (symbol.SectionNumber as usize).wrapping_sub(1);
-                let section = match self.section_map.get(section_idx) {
-                    Some(s) => s,
-                    None => return Err(CoffeeLdrError::InvalidSectionIndex(section_idx)),
-                };
-                let entrypoint = unsafe { section.base.offset(symbol.Value as isize) };
+                let section_addr = self.section_map[(symbol.SectionNumber - 1) as usize].base;
+                let entrypoint = unsafe { section_addr.offset(symbol.Value as isize) };
                 let coff_main: CoffMain = unsafe { transmute(entrypoint) };
                 coff_main(args.unwrap_or(null_mut()), argc.unwrap_or(0));
                 break;
@@ -341,10 +337,8 @@ impl<'a> CoffMemory<'a> {
     ///
     /// Fails if the section cannot be located, resized or overwritten.
     fn alloc_with_stomping(&self) -> Result<(Vec<SectionMap>, Option<*mut c_void>)> {
-        let (mut text_address, mut size) = match self.get_text_module() {
-            Some(v) => v,
-            None => return Err(CoffeeLdrError::StompingTextSectionNotFound),
-        };
+        let (mut text_address, mut size) = self.get_text_module()
+            .ok_or(CoffeeLdrError::StompingTextSectionNotFound)?;
 
         // If the file is larger than the space inside the .text of the target module,
         // we do not stomp
@@ -430,10 +424,7 @@ impl CoffSymbol {
         
         // When stomping, we must reuse the memory at `base_addr`
         let address = if !module.is_empty() {
-            let addr = match base_addr {
-                Some(a) => a,
-                None => return Err(CoffeeLdrError::MissingStompingBaseAddress),
-            };
+            let addr = base_addr.ok_or(CoffeeLdrError::MissingStompingBaseAddress)?;
             addr as *mut *mut c_void
         } else {
             let mut size = MAX_SYMBOLS * size_of::<*mut c_void>();
@@ -683,18 +674,10 @@ impl<'a> CoffRelocation<'a> {
             let relocations = self.coff.get_relocations(section);
             for relocation in relocations.iter() {
                 // Look up the symbol associated with the relocation
-                let sym_idx = relocation.SymbolTableIndex as usize;
-                let symbol = match self.coff.symbols.get(sym_idx) {
-                    Some(s) => s,
-                    None => return Err(CoffeeLdrError::InvalidSectionIndex(sym_idx)),
-                };
+                let symbol = &self.coff.symbols[relocation.SymbolTableIndex as usize];
 
                 // Compute the address where the relocation should be applied
-                let section_base = match self.section_map.get(i) {
-                    Some(s) => s.base,
-                    None => return Err(CoffeeLdrError::InvalidSectionIndex(i)),
-                };
-                let symbol_reloc_addr = (section_base as usize
+                let symbol_reloc_addr = (self.section_map[i].base as usize 
                     + unsafe { relocation.Anonymous.VirtualAddress } as usize) as *mut c_void;
 
                 // Retrieve the symbol's name 
@@ -744,13 +727,18 @@ impl<'a> CoffRelocation<'a> {
     ///
     /// Fails if the relocation kind is not supported for the active architecture.
     fn process_relocations(
-        &self,
-        reloc_addr: *mut c_void,
-        function_address: *mut c_void,
-        symbols: *mut *mut c_void,
-        relocation: &IMAGE_RELOCATION,
+        &self, 
+        reloc_addr: *mut c_void, 
+        function_address: *mut c_void, 
+        symbols: *mut *mut c_void, 
+        relocation: &IMAGE_RELOCATION, 
         symbol: &IMAGE_SYMBOL
     ) -> Result<()> {
+        debug!(
+            "Processing relocation: Type = {}, Symbol Type = {}, StorageClass = {}, Section Number: {}", 
+            relocation.Type, symbol.Type, symbol.StorageClass, symbol.SectionNumber
+        );
+
         unsafe {
             if symbol.StorageClass == IMAGE_SYM_CLASS_EXTERNAL as u8 && symbol.SectionNumber == 0 {
                 match self.coff.arch {
@@ -773,11 +761,7 @@ impl<'a> CoffRelocation<'a> {
                 }
             }
 
-            let sec_idx = (symbol.SectionNumber as usize).wrapping_sub(1);
-            let section_addr = match self.section_map.get(sec_idx) {
-                Some(s) => s.base,
-                None => return Err(CoffeeLdrError::InvalidSectionIndex(sec_idx)),
-            };
+            let section_addr = self.section_map[(symbol.SectionNumber - 1) as usize].base;
             match self.coff.arch {
                 CoffMachine::X64 => {
                     match relocation.Type as u32 {

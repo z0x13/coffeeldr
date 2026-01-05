@@ -95,9 +95,7 @@ impl<'a> Coff<'a> {
 
         // A vector of COFF symbols
         let symbol_offset = file_header.PointerToSymbolTable as usize;
-        let symbol_buf = buffer.get(symbol_offset..)
-            .ok_or(CoffError::InvalidCoffSymbolsFile)?;
-        let mut cursor = Cursor::new(symbol_buf);
+        let mut cursor = Cursor::new(&buffer[symbol_offset..]);
         let symbols = (0..num_symbols)
             .map(|_| {
                 IMAGE_SYMBOL::read(&mut cursor)
@@ -107,9 +105,7 @@ impl<'a> Coff<'a> {
 
         // A vector of COFF sections
         let section_offset = size_of::<IMAGE_FILE_HEADER>() + file_header.SizeOfOptionalHeader as usize;
-        let section_buf = buffer.get(section_offset..)
-            .ok_or(CoffError::InvalidCoffSectionFile)?;
-        let mut section_cursor = Cursor::new(section_buf);
+        let mut section_cursor = Cursor::new(&buffer[section_offset..]);
         let sections = (0..num_sections)
             .map(|_| {
                 IMAGE_SECTION_HEADER::read(&mut section_cursor)
@@ -158,11 +154,10 @@ impl<'a> Coff<'a> {
             .fold(length, |mut total_length, section| {
                 let relocations = self.get_relocations(section);
                 relocations.iter().for_each(|relocation| {
-                    if let Some(sym) = self.symbols.get(relocation.SymbolTableIndex as usize) {
-                        let name = self.get_symbol_name(sym);
-                        if name.starts_with("__imp_") {
-                            total_length += size_of::<*const c_void>();
-                        }
+                    let sym = &self.symbols[relocation.SymbolTableIndex as usize];
+                    let name = self.get_symbol_name(sym);
+                    if name.starts_with("__imp_") {
+                        total_length += size_of::<*const c_void>();
                     }
                 });
 
@@ -180,11 +175,7 @@ impl<'a> Coff<'a> {
         let reloc_offset = section.PointerToRelocations as usize;
         let num_relocs = section.NumberOfRelocations as usize;
         let mut relocations = Vec::with_capacity(num_relocs);
-
-        let Some(buf) = self.buffer.get(reloc_offset..) else {
-            return relocations;
-        };
-        let mut cursor = Cursor::new(buf);
+        let mut cursor = Cursor::new(&self.buffer[reloc_offset..]);
 
         for _ in 0..num_relocs {
             match IMAGE_RELOCATION::read(&mut cursor) {
@@ -211,17 +202,10 @@ impl<'a> Coff<'a> {
 
                 // Retrieve the name from the string table
                 let offset = string_table_offset + long_name_offset;
-                if let Some(name_ptr) = self.buffer.get(offset..) {
-                    if let Some(&first_byte) = name_ptr.first() {
-                        CStr::from_ptr((&first_byte) as *const u8 as *const i8)
-                            .to_string_lossy()
-                            .into_owned()
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                }
+                let name_ptr = &self.buffer[offset] as *const u8;
+                CStr::from_ptr(name_ptr.cast())
+                    .to_string_lossy()
+                    .into_owned()
             };
 
             name.trim_end_matches('\0').to_string()
