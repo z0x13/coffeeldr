@@ -63,7 +63,7 @@ fn process_input(input: &str, pack: &mut BeaconPack) -> Result<(), String> {
 
     } else if input.starts_with("/str:") {
         let str_data = &input[5..];
-        pack.addstr(str_data).map_err(|e| format!("Error adding str: {e}"))?;
+        pack.addstr(str_data);
         info!("Added string: {}", str_data);
 
     } else if input.starts_with("/wstr:") {
@@ -75,7 +75,7 @@ fn process_input(input: &str, pack: &mut BeaconPack) -> Result<(), String> {
         let base64_data = &input[5..];
         match general_purpose::STANDARD.decode(base64_data) {
             Ok(decoded) => {
-                pack.addbin(&decoded).map_err(|e| format!("Error adding bin: {e}"))?;
+                pack.addbin(&decoded);
                 info!("Added binary: {}", base64_data);
             }
             Err(e) => return Err(format!("Error decoding Base64: {e}")),
@@ -89,7 +89,7 @@ fn process_input(input: &str, pack: &mut BeaconPack) -> Result<(), String> {
         }
         match std::fs::read(file_fd) {
             Ok(file_data) => {
-                pack.addbin(&file_data).map_err(|e| format!("Error adding bin: {e}"))?;
+                pack.addbin(&file_data);
                 info!("Added binary file: {}", file_path);
             },
             Err(e) => return Err(format!("Error reading file '{}': {e}", file_path)),

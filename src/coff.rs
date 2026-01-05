@@ -7,8 +7,6 @@ use alloc::{
 };
 
 use log::{debug, warn};
-use binrw::{BinRead, binread};
-use binrw::io::Cursor;
 
 use crate::error::{CoffError, CoffeeLdrError};
 
@@ -70,12 +68,9 @@ impl<'a> Coff<'a> {
             return Err(CoffError::InvalidCoffFile);
         }
 
-        // Creating a cursor
-        let mut cursor = Cursor::new(buffer);
-
         // The COFF file header
-        let file_header = IMAGE_FILE_HEADER::read(&mut cursor)
-            .map_err(|_| CoffError::InvalidCoffFile)?;
+        let file_header = IMAGE_FILE_HEADER::from_bytes(buffer)
+            .ok_or(CoffError::InvalidCoffFile)?;
 
         // Detects the architecture of the COFF file and returns an enum `CoffMachine`
         let arch = Self::validate_architecture(file_header)?;
@@ -95,21 +90,23 @@ impl<'a> Coff<'a> {
 
         // A vector of COFF symbols
         let symbol_offset = file_header.PointerToSymbolTable as usize;
-        let mut cursor = Cursor::new(&buffer[symbol_offset..]);
-        let symbols = (0..num_symbols)
-            .map(|_| {
-                IMAGE_SYMBOL::read(&mut cursor)
-                    .map_err(|_| CoffError::InvalidCoffSymbolsFile)
+        let symbol_data = buffer.get(symbol_offset..).ok_or(CoffError::InvalidCoffSymbolsFile)?;
+        let symbols = (0..num_symbols as usize)
+            .map(|i| {
+                let offset = i * size_of::<IMAGE_SYMBOL>();
+                IMAGE_SYMBOL::from_bytes(symbol_data.get(offset..).ok_or(CoffError::InvalidCoffSymbolsFile)?)
+                    .ok_or(CoffError::InvalidCoffSymbolsFile)
             })
             .collect::<Result<Vec<IMAGE_SYMBOL>, _>>()?;
 
         // A vector of COFF sections
         let section_offset = size_of::<IMAGE_FILE_HEADER>() + file_header.SizeOfOptionalHeader as usize;
-        let mut section_cursor = Cursor::new(&buffer[section_offset..]);
-        let sections = (0..num_sections)
-            .map(|_| {
-                IMAGE_SECTION_HEADER::read(&mut section_cursor)
-                    .map_err(|_| CoffError::InvalidCoffSectionFile)
+        let section_data = buffer.get(section_offset..).ok_or(CoffError::InvalidCoffSectionFile)?;
+        let sections = (0..num_sections as usize)
+            .map(|i| {
+                let offset = i * size_of::<IMAGE_SECTION_HEADER>();
+                IMAGE_SECTION_HEADER::from_bytes(section_data.get(offset..).ok_or(CoffError::InvalidCoffSectionFile)?)
+                    .ok_or(CoffError::InvalidCoffSectionFile)
             })
             .collect::<Result<Vec<IMAGE_SECTION_HEADER>, _>>()?;
 
@@ -175,13 +172,17 @@ impl<'a> Coff<'a> {
         let reloc_offset = section.PointerToRelocations as usize;
         let num_relocs = section.NumberOfRelocations as usize;
         let mut relocations = Vec::with_capacity(num_relocs);
-        let mut cursor = Cursor::new(&self.buffer[reloc_offset..]);
 
-        for _ in 0..num_relocs {
-            match IMAGE_RELOCATION::read(&mut cursor) {
-                Ok(reloc) => relocations.push(reloc),
-                Err(_e) => {
-                    debug!("Failed to read relocation: {_e:?}");
+        let Some(reloc_data) = self.buffer.get(reloc_offset..) else {
+            return relocations;
+        };
+
+        for i in 0..num_relocs {
+            let offset = i * size_of::<IMAGE_RELOCATION>();
+            match reloc_data.get(offset..).and_then(IMAGE_RELOCATION::from_bytes) {
+                Some(reloc) => relocations.push(reloc),
+                None => {
+                    debug!("Failed to read relocation at index {i}");
                     continue;
                 }
             }
@@ -302,9 +303,7 @@ impl<'a> From<&'a [u8]> for CoffSource<'a> {
 }
 
 /// Represents the file header of a COFF (Common Object File Format) file.
-#[binread]
 #[derive(Default, Debug, Clone, Copy)]
-#[br(little)]
 #[repr(C)]
 pub struct IMAGE_FILE_HEADER {
     /// The target machine architecture (e.g., x64, x32).
@@ -329,15 +328,29 @@ pub struct IMAGE_FILE_HEADER {
     pub Characteristics: u16,
 }
 
+impl IMAGE_FILE_HEADER {
+    const SIZE: usize = 20;
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < Self::SIZE {
+            return None;
+        }
+        Some(Self {
+            Machine: u16::from_le_bytes([bytes[0], bytes[1]]),
+            NumberOfSections: u16::from_le_bytes([bytes[2], bytes[3]]),
+            TimeDateStamp: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+            PointerToSymbolTable: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+            NumberOfSymbols: u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
+            SizeOfOptionalHeader: u16::from_le_bytes([bytes[16], bytes[17]]),
+            Characteristics: u16::from_le_bytes([bytes[18], bytes[19]]),
+        })
+    }
+}
+
 /// Represents a symbol in the COFF symbol table.
-#[binread]
 #[derive(Clone, Copy)]
-#[br(little)]
 #[repr(C, packed(2))]
 pub struct IMAGE_SYMBOL {
-    #[br(temp)]
-    name_raw: [u8; 8],
-
     /// The value associated with the symbol.
     pub Value: u32,
 
@@ -353,10 +366,27 @@ pub struct IMAGE_SYMBOL {
     /// The number of auxiliary symbol records.
     pub NumberOfAuxSymbols: u8,
 
-    #[br(calc = unsafe {
-        core::ptr::read_unaligned(name_raw.as_ptr() as *const IMAGE_SYMBOL_0)
-    })]
     pub N: IMAGE_SYMBOL_0,
+}
+
+impl IMAGE_SYMBOL {
+    const SIZE: usize = 18;
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < Self::SIZE {
+            return None;
+        }
+        let mut name_raw = [0u8; 8];
+        name_raw.copy_from_slice(&bytes[0..8]);
+        Some(Self {
+            Value: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+            SectionNumber: i16::from_le_bytes([bytes[12], bytes[13]]),
+            Type: u16::from_le_bytes([bytes[14], bytes[15]]),
+            StorageClass: bytes[16],
+            NumberOfAuxSymbols: bytes[17],
+            N: IMAGE_SYMBOL_0 { ShortName: name_raw },
+        })
+    }
 }
 
 /// A union representing different ways a symbol name can be stored.
@@ -385,16 +415,11 @@ pub struct IMAGE_SYMBOL_0_0 {
 }
 
 /// Represents a section header in a COFF file.
-#[binread]
 #[repr(C)]
-#[br(little)]
 #[derive(Clone, Copy)]
 pub struct IMAGE_SECTION_HEADER {
     /// The name of the section (8 bytes).
     pub Name: [u8; 8],
-
-    #[br(temp)]
-    misc_raw: u32,
 
     /// The virtual address of the section in memory.
     pub VirtualAddress: u32,
@@ -420,10 +445,33 @@ pub struct IMAGE_SECTION_HEADER {
     /// Characteristics that describe the section (e.g., executable, writable).
     pub Characteristics: u32,
 
-    #[br(calc = IMAGE_SECTION_HEADER_0 {
-        PhysicalAddress: misc_raw
-    })]
     pub Misc: IMAGE_SECTION_HEADER_0,
+}
+
+impl IMAGE_SECTION_HEADER {
+    const SIZE: usize = 40;
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < Self::SIZE {
+            return None;
+        }
+        let mut name = [0u8; 8];
+        name.copy_from_slice(&bytes[0..8]);
+        Some(Self {
+            Name: name,
+            Misc: IMAGE_SECTION_HEADER_0 {
+                PhysicalAddress: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+            },
+            VirtualAddress: u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
+            SizeOfRawData: u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]),
+            PointerToRawData: u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]),
+            PointerToRelocations: u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]),
+            PointerToLinenumbers: u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]),
+            NumberOfRelocations: u16::from_le_bytes([bytes[32], bytes[33]]),
+            NumberOfLinenumbers: u16::from_le_bytes([bytes[34], bytes[35]]),
+            Characteristics: u32::from_le_bytes([bytes[36], bytes[37], bytes[38], bytes[39]]),
+        })
+    }
 }
 
 /// A union representing either the physical or virtual size of the section.
@@ -438,23 +486,32 @@ pub union IMAGE_SECTION_HEADER_0 {
 }
 
 /// Represents a relocation entry in a COFF file.
-#[binread]
-#[br(little)]
 #[repr(C, packed(2))]
 pub struct IMAGE_RELOCATION {
-    #[br(temp)]
-    va_raw: u32,
-
     /// The index of the symbol in the symbol table.
     pub SymbolTableIndex: u32,
 
     /// The type of relocation.
     pub Type: u16,
 
-    #[br(calc = IMAGE_RELOCATION_0 {
-        VirtualAddress: va_raw
-    })]
     pub Anonymous: IMAGE_RELOCATION_0,
+}
+
+impl IMAGE_RELOCATION {
+    const SIZE: usize = 10;
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < Self::SIZE {
+            return None;
+        }
+        Some(Self {
+            Anonymous: IMAGE_RELOCATION_0 {
+                VirtualAddress: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            },
+            SymbolTableIndex: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+            Type: u16::from_le_bytes([bytes[8], bytes[9]]),
+        })
+    }
 }
 
 /// A union representing either the virtual address or relocation count.

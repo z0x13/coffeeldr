@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use binrw::io::Write;
 use hex::FromHex;
 use crate::error::Result;
 
@@ -61,21 +60,15 @@ impl BeaconPack {
     }
 
     /// Appends a UTF-8 string with a length prefix and null terminator.
-    ///
-    /// # Errors
-    ///
-    /// Propagates any error produced while writing into the internal buffer.
-    pub fn addstr(&mut self, s: &str) -> Result<()> {
+    pub fn addstr(&mut self, s: &str) {
         let s_bytes = s.as_bytes();
         let length = s_bytes.len() as u32 + 1;
         self.write_u32(length);
-        self.buffer.write_all(s_bytes)?;
+        self.buffer.extend_from_slice(s_bytes);
 
         // Null terminator.
         self.write_u8(0);
         self.size += 4 + s_bytes.len() as u32 + 1;
-
-        Ok(())
     }
 
     /// Appends a UTF-16LE wide string with a length prefix and null terminator.
@@ -97,16 +90,11 @@ impl BeaconPack {
     }
 
     /// Appends a raw binary blob with a length prefix.
-    ///
-    /// # Errors
-    ///
-    /// Propagates any error produced while writing into the internal buffer.
-    pub fn addbin(&mut self, data: &[u8]) -> Result<()> {
+    pub fn addbin(&mut self, data: &[u8]) {
         let length = data.len() as u32;
         self.write_u32(length);
-        self.buffer.write_all(data)?;
+        self.buffer.extend_from_slice(data);
         self.size += 4 + length;
-        Ok(())
     }
 
     /// Clears the internal buffer and resets the tracked size.

@@ -15,17 +15,9 @@ pub enum CoffeeLdrError {
     #[error("{0}")]
     Msg(String),
 
-    /// Error returned by the `binrw` parser while reading or deserializing COFF data.
-    #[error("binrw error: {0}")]
-    Binrw(binrw::Error),
-
     /// Hexadecimal encoding or decoding failure.
     #[error("hex error: {0}")]
     Hex(hex::FromHexError),
-
-    /// I/O read or write failure.
-    #[error("io error: {0}")]
-    Io(binrw::io::Error),
 
     /// Nested COFF parsing or validation error.
     #[error("coff error: {0}")]
@@ -131,11 +123,5 @@ pub enum CoffError {
 impl From<hex::FromHexError> for CoffeeLdrError {
     fn from(err: hex::FromHexError) -> Self {
         CoffeeLdrError::Hex(err)
-    }
-}
-
-impl From<binrw::io::Error> for CoffeeLdrError {
-    fn from(err: binrw::io::Error) -> Self {
-        CoffeeLdrError::Binrw(binrw::Error::Io(err))
     }
 }

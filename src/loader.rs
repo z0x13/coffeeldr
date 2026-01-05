@@ -946,7 +946,7 @@ mod tests {
     #[test]
     fn test_dir() -> Result<()> {
         let mut pack = BeaconPack::default();
-        pack.addstr("C:\\Windows")?;
+        pack.addstr("C:\\Windows");
 
         let args = pack.get_buffer_hex()?;
         let mut coffee = CoffeeLdr::new("bofs/dir.x64.o")?;
