@@ -162,30 +162,21 @@ impl<'a> CoffeeLdr<'a> {
     /// Executes the COFF payload by invoking the chosen entry point.
     ///
     /// The loader prepares memory, applies relocations, resolves imports,
-    /// and then jumps to the specified entry symbol.  
-    /// Any Beacon output captured during execution is returned as a string.
+    /// and then jumps to the specified entry symbol.
+    /// Any Beacon output captured during execution is returned as raw bytes.
     ///
     /// # Errors
     ///
     /// Fails if preparation fails (bad architecture, memory failure,
     /// relocation errors, unresolved imports) or if output transport fails.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let mut loader = CoffeeLdr::new("whoami.o")?;
-    /// let output = loader.run("go", None, None)?;
-    /// println!("{output}");
-    /// ```
     pub fn run(
         &mut self,
         entry: &str,
         args: Option<*mut u8>,
         argc: Option<usize>,
-    ) -> Result<String> {
+    ) -> Result<Vec<u8>> {
         info!("Preparing environment for COFF execution.");
 
-        // Prepares the environment to execute the COFF file
         self.prepare()?;
 
         for symbol in &self.coff.symbols {
@@ -206,10 +197,9 @@ impl<'a> CoffeeLdr<'a> {
             }
         }
 
-        // Returns the output if available, otherwise, returns an empty response
         Ok(get_output_data()
             .filter(|o| !o.buffer.is_empty())
-            .map(|o| o.to_string())
+            .map(|o| o.buffer.iter().map(|&c| c as u8).collect())
             .unwrap_or_default())
     }
 
@@ -926,8 +916,9 @@ mod tests {
     #[test]
     fn test_whoami() -> Result<()> {
         let mut coffee = CoffeeLdr::new("bofs/whoami.x64.o")?;
-        let output = coffee.run("go", None, None)?;
-        
+        let output_bytes = coffee.run("go", None, None)?;
+        let output = String::from_utf8_lossy(&output_bytes);
+
         assert!(
             output.contains("\\")
                 || output.contains("User")
@@ -942,15 +933,16 @@ mod tests {
     #[test]
     fn test_stomping() -> Result<()> {
         let mut coffee = CoffeeLdr::new("bofs/whoami.x64.o")?.with_module_stomping("amsi.dll");
-        let output = coffee.run("go", None, None)?;
-        
+        let output_bytes = coffee.run("go", None, None)?;
+        let output = String::from_utf8_lossy(&output_bytes);
+
         assert!(
             output.contains("\\")
                 || output.contains("User")
                 || output.contains("Account"),
             "whoami output (with stomping) looks invalid: {output}"
         );
-        
+
         Ok(())
     }
 
@@ -961,7 +953,8 @@ mod tests {
 
         let args = pack.get_buffer_hex()?;
         let mut coffee = CoffeeLdr::new("bofs/dir.x64.o")?;
-        let output = coffee.run("go", Some(args.as_ptr() as _), Some(args.len()))?;
+        let output_bytes = coffee.run("go", Some(args.as_ptr() as _), Some(args.len()))?;
+        let output = String::from_utf8_lossy(&output_bytes);
 
         assert!(
             output.contains("Directory of")
@@ -978,10 +971,11 @@ mod tests {
     fn test_buffer_memory() -> Result<()> {
         let buffer = include_bytes!("../bofs/whoami.x64.o");
         let mut coffee = CoffeeLdr::new(buffer)?;
-        let output = coffee.run("go", None, None)?;
-        
+        let output_bytes = coffee.run("go", None, None)?;
+        let output = String::from_utf8_lossy(&output_bytes);
+
         assert!(
-            output.contains("\\") 
+            output.contains("\\")
                 || output.contains("User")
                 || output.contains("Account"),
             "whoami buffer-loaded output does not look valid: {output}"
