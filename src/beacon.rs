@@ -1,4 +1,5 @@
 use alloc::{
+    collections::BTreeMap,
     string::{String, ToString},
     vec::Vec,
 };
@@ -28,10 +29,14 @@ use windows_sys::Win32::{
     },
 };
 
+use const_hashes::murmur3;
 use crate::error::{CoffeeLdrError, Result};
 
 /// Global output buffer used by Beacon-compatible functions.
 static BEACON_BUFFER: Mutex<BeaconOutputBuffer> = Mutex::new(BeaconOutputBuffer::new());
+
+/// Global key-value store for BOF inter-call data sharing.
+static BEACON_KV_STORE: Mutex<BTreeMap<String, usize>> = Mutex::new(BTreeMap::new());
 
 /// A buffer used for managing and collecting output for the beacon.
 #[repr(C)]
@@ -124,32 +129,35 @@ struct Format {
 }
 
 // Beacon function hash constants (murmur3)
-const H_BEACON_PRINTF: u32 = const_hashes::runtime::murmur3("BeaconPrintf");
-const H_BEACON_OUTPUT: u32 = const_hashes::runtime::murmur3("BeaconOutput");
-const H_BEACON_GET_OUTPUT_DATA: u32 = const_hashes::runtime::murmur3("BeaconGetOutputData");
-const H_BEACON_IS_ADMIN: u32 = const_hashes::runtime::murmur3("BeaconIsAdmin");
-const H_BEACON_USE_TOKEN: u32 = const_hashes::runtime::murmur3("BeaconUseToken");
-const H_BEACON_REVERT_TOKEN: u32 = const_hashes::runtime::murmur3("BeaconRevertToken");
-const H_BEACON_FORMAT_INT: u32 = const_hashes::runtime::murmur3("BeaconFormatInt");
-const H_BEACON_FORMAT_FREE: u32 = const_hashes::runtime::murmur3("BeaconFormatFree");
-const H_BEACON_FORMAT_ALLOC: u32 = const_hashes::runtime::murmur3("BeaconFormatAlloc");
-const H_BEACON_FORMAT_RESET: u32 = const_hashes::runtime::murmur3("BeaconFormatReset");
-const H_BEACON_FORMAT_PRINTF: u32 = const_hashes::runtime::murmur3("BeaconFormatPrintf");
-const H_BEACON_FORMAT_APPEND: u32 = const_hashes::runtime::murmur3("BeaconFormatAppend");
-const H_BEACON_FORMAT_TO_STRING: u32 = const_hashes::runtime::murmur3("BeaconFormatToString");
-const H_BEACON_GET_SPAWN_TO: u32 = const_hashes::runtime::murmur3("BeaconGetSpawnTo");
-const H_BEACON_INJECT_PROCESS: u32 = const_hashes::runtime::murmur3("BeaconInjectProcess");
-const H_BEACON_CLEANUP_PROCESS: u32 = const_hashes::runtime::murmur3("BeaconCleanupProcess");
-const H_BEACON_SPAWN_TEMPORARY_PROCESS: u32 = const_hashes::runtime::murmur3("BeaconSpawnTemporaryProcess");
-const H_BEACON_INJECT_TEMPORARY_PROCESS: u32 = const_hashes::runtime::murmur3("BeaconInjectTemporaryProcess");
-const H_BEACON_DATA_INT: u32 = const_hashes::runtime::murmur3("BeaconDataInt");
-const H_BEACON_DATA_SHORT: u32 = const_hashes::runtime::murmur3("BeaconDataShort");
-const H_BEACON_DATA_PARSE: u32 = const_hashes::runtime::murmur3("BeaconDataParse");
-const H_BEACON_DATA_LENGTH: u32 = const_hashes::runtime::murmur3("BeaconDataLength");
-const H_BEACON_DATA_EXTRACT: u32 = const_hashes::runtime::murmur3("BeaconDataExtract");
-const H_BEACON_DATA_PTR: u32 = const_hashes::runtime::murmur3("BeaconDataPtr");
-const H_TO_WIDE_CHAR: u32 = const_hashes::runtime::murmur3("toWideChar");
-const H_BEACON_INFORMATION: u32 = const_hashes::runtime::murmur3("BeaconInformation");
+const H_BEACON_PRINTF: u32 = murmur3!("BeaconPrintf");
+const H_BEACON_OUTPUT: u32 = murmur3!("BeaconOutput");
+const H_BEACON_GET_OUTPUT_DATA: u32 = murmur3!("BeaconGetOutputData");
+const H_BEACON_IS_ADMIN: u32 = murmur3!("BeaconIsAdmin");
+const H_BEACON_USE_TOKEN: u32 = murmur3!("BeaconUseToken");
+const H_BEACON_REVERT_TOKEN: u32 = murmur3!("BeaconRevertToken");
+const H_BEACON_FORMAT_INT: u32 = murmur3!("BeaconFormatInt");
+const H_BEACON_FORMAT_FREE: u32 = murmur3!("BeaconFormatFree");
+const H_BEACON_FORMAT_ALLOC: u32 = murmur3!("BeaconFormatAlloc");
+const H_BEACON_FORMAT_RESET: u32 = murmur3!("BeaconFormatReset");
+const H_BEACON_FORMAT_PRINTF: u32 = murmur3!("BeaconFormatPrintf");
+const H_BEACON_FORMAT_APPEND: u32 = murmur3!("BeaconFormatAppend");
+const H_BEACON_FORMAT_TO_STRING: u32 = murmur3!("BeaconFormatToString");
+const H_BEACON_GET_SPAWN_TO: u32 = murmur3!("BeaconGetSpawnTo");
+const H_BEACON_INJECT_PROCESS: u32 = murmur3!("BeaconInjectProcess");
+const H_BEACON_CLEANUP_PROCESS: u32 = murmur3!("BeaconCleanupProcess");
+const H_BEACON_SPAWN_TEMPORARY_PROCESS: u32 = murmur3!("BeaconSpawnTemporaryProcess");
+const H_BEACON_INJECT_TEMPORARY_PROCESS: u32 = murmur3!("BeaconInjectTemporaryProcess");
+const H_BEACON_DATA_INT: u32 = murmur3!("BeaconDataInt");
+const H_BEACON_DATA_SHORT: u32 = murmur3!("BeaconDataShort");
+const H_BEACON_DATA_PARSE: u32 = murmur3!("BeaconDataParse");
+const H_BEACON_DATA_LENGTH: u32 = murmur3!("BeaconDataLength");
+const H_BEACON_DATA_EXTRACT: u32 = murmur3!("BeaconDataExtract");
+const H_BEACON_DATA_PTR: u32 = murmur3!("BeaconDataPtr");
+const H_TO_WIDE_CHAR: u32 = murmur3!("toWideChar");
+const H_BEACON_INFORMATION: u32 = murmur3!("BeaconInformation");
+const H_BEACON_ADD_VALUE: u32 = murmur3!("BeaconAddValue");
+const H_BEACON_GET_VALUE: u32 = murmur3!("BeaconGetValue");
+const H_BEACON_REMOVE_VALUE: u32 = murmur3!("BeaconRemoveValue");
 
 /// Resolves the internal address of a built-in Beacon function.
 ///
@@ -198,6 +206,12 @@ pub fn get_function_internal_address(name: &str) -> Result<usize> {
         // Utils
         H_TO_WIDE_CHAR => Ok(to_wide_char as *const () as usize),
         H_BEACON_INFORMATION => Ok(0),
+
+        // Key-Value Store
+        H_BEACON_ADD_VALUE => Ok(beacon_add_value as *const () as usize),
+        H_BEACON_GET_VALUE => Ok(beacon_get_value as *const () as usize),
+        H_BEACON_REMOVE_VALUE => Ok(beacon_remove_value as *const () as usize),
+
         _ => Err(CoffeeLdrError::FunctionInternalNotFound(name.to_string())),
     }
 }
@@ -682,4 +696,63 @@ fn beacon_spawn_temporary_process(
 /// Leaving this to be implemented by people needing/wanting it
 fn beacon_get_spawn_to(_x86: i32, _buffer: *const c_char, _length: c_int) {
     unimplemented!()
+}
+
+/// Adds a key-value pair to the global store.
+/// Returns TRUE if added successfully, FALSE if key already exists or ptr is NULL.
+fn beacon_add_value(key: *const c_char, ptr: *mut c_void) -> i32 {
+    if key.is_null() || ptr.is_null() {
+        return 0;
+    }
+
+    let key_str = unsafe {
+        match CStr::from_ptr(key).to_str() {
+            Ok(s) => s,
+            Err(_) => return 0,
+        }
+    };
+
+    let mut store = BEACON_KV_STORE.lock();
+    if store.contains_key(key_str) {
+        return 0;
+    }
+
+    store.insert(key_str.into(), ptr as usize);
+    1
+}
+
+/// Retrieves a value from the global store by key.
+/// Returns NULL if key not found.
+fn beacon_get_value(key: *const c_char) -> *mut c_void {
+    if key.is_null() {
+        return null_mut();
+    }
+
+    let key_str = unsafe {
+        match CStr::from_ptr(key).to_str() {
+            Ok(s) => s,
+            Err(_) => return null_mut(),
+        }
+    };
+
+    let store = BEACON_KV_STORE.lock();
+    store.get(key_str).map_or(null_mut(), |&v| v as *mut c_void)
+}
+
+/// Removes a key-value pair from the global store.
+/// Returns TRUE if removed, FALSE if key not found.
+fn beacon_remove_value(key: *const c_char) -> i32 {
+    if key.is_null() {
+        return 0;
+    }
+
+    let key_str = unsafe {
+        match CStr::from_ptr(key).to_str() {
+            Ok(s) => s,
+            Err(_) => return 0,
+        }
+    };
+
+    let mut store = BEACON_KV_STORE.lock();
+    if store.remove(key_str).is_some() { 1 } else { 0 }
 }
