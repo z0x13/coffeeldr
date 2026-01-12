@@ -775,6 +775,8 @@ impl<'a> CoffRelocation<'a> {
                 .ok_or(CoffeeLdrError::InvalidRelocationType(relocation.Type))?;
 
             let section_addr = self.section_map[section_idx].base;
+            // Target address includes symbol offset within section
+            let target_addr = (section_addr as usize).wrapping_add(symbol.Value as usize);
             match self.coff.arch {
                 CoffMachine::X64 => {
                     match relocation.Type as u32 {
@@ -782,7 +784,7 @@ impl<'a> CoffRelocation<'a> {
                             write_unaligned(
                                 reloc_addr as *mut u32,
                                 read_unaligned(reloc_addr as *mut u32)
-                                    .wrapping_add((section_addr as usize)
+                                    .wrapping_add(target_addr
                                         .wrapping_sub(reloc_addr as usize)
                                         .wrapping_sub(size_of::<u32>()) as u32
                                 ),
@@ -792,14 +794,14 @@ impl<'a> CoffRelocation<'a> {
                             write_unaligned(
                                 reloc_addr as *mut u64,
                                 read_unaligned(reloc_addr as *mut u64)
-                                    .wrapping_add(section_addr as u64),
+                                    .wrapping_add(target_addr as u64),
                             );
                         },
                         r @ IMAGE_REL_AMD64_REL32..=IMAGE_REL_AMD64_REL32_5 => {
                             write_unaligned(
                                 reloc_addr as *mut u32,
                                 read_unaligned(reloc_addr as *mut u32)
-                                    .wrapping_add((section_addr as usize)
+                                    .wrapping_add(target_addr
                                         .wrapping_sub(reloc_addr as usize)
                                         .wrapping_sub(size_of::<u32>())
                                         .wrapping_sub((r - 4) as usize) as u32
@@ -815,7 +817,7 @@ impl<'a> CoffRelocation<'a> {
                             write_unaligned(
                                 reloc_addr as *mut u32,
                                 read_unaligned(reloc_addr as *mut u32)
-                                    .wrapping_add((section_addr as usize)
+                                    .wrapping_add(target_addr
                                     .wrapping_sub(reloc_addr as usize)
                                     .wrapping_sub(size_of::<u32>()) as u32
                                 )
@@ -825,7 +827,7 @@ impl<'a> CoffRelocation<'a> {
                             write_unaligned(
                                 reloc_addr as *mut u32,
                                 read_unaligned(reloc_addr as *mut u32)
-                                    .wrapping_add(section_addr as u32)
+                                    .wrapping_add(target_addr as u32)
                             );
                         },
                         _ => return Err(CoffeeLdrError::InvalidRelocationType(relocation.Type))

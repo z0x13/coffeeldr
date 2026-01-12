@@ -148,7 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     match coffee.run(&cli.entrypoint, buffer, len) {
-        Ok(result) => print!("Output:\n {result}"),
+        Ok(result) => print!("Output:\n{}", String::from_utf8_lossy(&result)),
         Err(err_code) => error!("{:?}", err_code),
     }
 
