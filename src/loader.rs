@@ -750,16 +750,18 @@ impl<'a> CoffRelocation<'a> {
         unsafe {
             if symbol.StorageClass == IMAGE_SYM_CLASS_EXTERNAL as u8 && symbol.SectionNumber == 0 {
                 match self.coff.arch {
-                    CoffMachine::X64 =>  {
-                        if relocation.Type as u32 == IMAGE_REL_AMD64_REL32 && !function_address.is_null() {
+                    CoffMachine::X64 => {
+                        let r = relocation.Type as u32;
+                        if matches!(r, IMAGE_REL_AMD64_REL32..=IMAGE_REL_AMD64_REL32_5) && !function_address.is_null() {
                             let relative_address = (symbols as usize)
                                 .wrapping_sub(reloc_addr as usize)
-                                .wrapping_sub(size_of::<u32>());
+                                .wrapping_sub(size_of::<u32>())
+                                .wrapping_sub((r - IMAGE_REL_AMD64_REL32) as usize);
 
                             write_unaligned(reloc_addr as *mut u32, relative_address as u32);
-                            return Ok(())
+                            return Ok(());
                         }
-                    },
+                    }
                     CoffMachine::X32 => {
                         if relocation.Type as u32 == IMAGE_REL_I386_DIR32 && !function_address.is_null() {
                             write_unaligned(reloc_addr as *mut u32, symbols as u32);
