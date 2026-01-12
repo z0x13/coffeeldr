@@ -951,7 +951,7 @@ fn LoadLibraryExA(
     h_file: *mut c_void, 
     dw_flags: u32
 ) -> Option<*mut c_void> {
-    let kernel32 = get_module_address(2808682670u32, Some(dinvk::hash::murmur3));
+    let kernel32 = get_module_address(murmur3!("KERNEL32.DLL"), Some(dinvk::hash::murmur3));
     dinvoke!(
         kernel32,
         s!("LoadLibraryExA"),

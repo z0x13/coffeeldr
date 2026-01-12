@@ -13,7 +13,7 @@ use core::{
 use spin::Mutex;
 use obfstr::obfstr as s;
 use dinvk::{winapis::NtCurrentProcess, syscall};
-use dinvk::{types::OBJECT_ATTRIBUTES, hash::jenkins3};
+use dinvk::types::OBJECT_ATTRIBUTES;
 use windows_sys::Win32::{
     Security::*,
     Foundation::{CloseHandle, HANDLE, STATUS_SUCCESS},
@@ -123,53 +123,81 @@ struct Format {
     size: c_int,
 }
 
+// Beacon function hash constants (murmur3)
+const H_BEACON_PRINTF: u32 = const_hashes::runtime::murmur3("BeaconPrintf");
+const H_BEACON_OUTPUT: u32 = const_hashes::runtime::murmur3("BeaconOutput");
+const H_BEACON_GET_OUTPUT_DATA: u32 = const_hashes::runtime::murmur3("BeaconGetOutputData");
+const H_BEACON_IS_ADMIN: u32 = const_hashes::runtime::murmur3("BeaconIsAdmin");
+const H_BEACON_USE_TOKEN: u32 = const_hashes::runtime::murmur3("BeaconUseToken");
+const H_BEACON_REVERT_TOKEN: u32 = const_hashes::runtime::murmur3("BeaconRevertToken");
+const H_BEACON_FORMAT_INT: u32 = const_hashes::runtime::murmur3("BeaconFormatInt");
+const H_BEACON_FORMAT_FREE: u32 = const_hashes::runtime::murmur3("BeaconFormatFree");
+const H_BEACON_FORMAT_ALLOC: u32 = const_hashes::runtime::murmur3("BeaconFormatAlloc");
+const H_BEACON_FORMAT_RESET: u32 = const_hashes::runtime::murmur3("BeaconFormatReset");
+const H_BEACON_FORMAT_PRINTF: u32 = const_hashes::runtime::murmur3("BeaconFormatPrintf");
+const H_BEACON_FORMAT_APPEND: u32 = const_hashes::runtime::murmur3("BeaconFormatAppend");
+const H_BEACON_FORMAT_TO_STRING: u32 = const_hashes::runtime::murmur3("BeaconFormatToString");
+const H_BEACON_GET_SPAWN_TO: u32 = const_hashes::runtime::murmur3("BeaconGetSpawnTo");
+const H_BEACON_INJECT_PROCESS: u32 = const_hashes::runtime::murmur3("BeaconInjectProcess");
+const H_BEACON_CLEANUP_PROCESS: u32 = const_hashes::runtime::murmur3("BeaconCleanupProcess");
+const H_BEACON_SPAWN_TEMPORARY_PROCESS: u32 = const_hashes::runtime::murmur3("BeaconSpawnTemporaryProcess");
+const H_BEACON_INJECT_TEMPORARY_PROCESS: u32 = const_hashes::runtime::murmur3("BeaconInjectTemporaryProcess");
+const H_BEACON_DATA_INT: u32 = const_hashes::runtime::murmur3("BeaconDataInt");
+const H_BEACON_DATA_SHORT: u32 = const_hashes::runtime::murmur3("BeaconDataShort");
+const H_BEACON_DATA_PARSE: u32 = const_hashes::runtime::murmur3("BeaconDataParse");
+const H_BEACON_DATA_LENGTH: u32 = const_hashes::runtime::murmur3("BeaconDataLength");
+const H_BEACON_DATA_EXTRACT: u32 = const_hashes::runtime::murmur3("BeaconDataExtract");
+const H_BEACON_DATA_PTR: u32 = const_hashes::runtime::murmur3("BeaconDataPtr");
+const H_TO_WIDE_CHAR: u32 = const_hashes::runtime::murmur3("toWideChar");
+const H_BEACON_INFORMATION: u32 = const_hashes::runtime::murmur3("BeaconInformation");
+
 /// Resolves the internal address of a built-in Beacon function.
 ///
-/// The lookup uses a Jenkins hash of the symbol name to match the
+/// The lookup uses a murmur3 hash of the symbol name to match the
 /// internal function used by BOF payloads.
 ///
 /// # Errors
 ///
 /// Fails when the requested function is not mapped to any known internal handler.
 pub fn get_function_internal_address(name: &str) -> Result<usize> {
-    match jenkins3(name) {
+    match const_hashes::runtime::murmur3(name) {
         // Output
-        3210322847u32 => Ok(beacon_printf as *const () as usize),
-        358755801u32 => Ok(beacon_output as *const () as usize),
-        2979319955u32 => Ok(beacon_get_output_data as *const () as usize),
+        H_BEACON_PRINTF => Ok(beacon_printf as *const () as usize),
+        H_BEACON_OUTPUT => Ok(beacon_output as *const () as usize),
+        H_BEACON_GET_OUTPUT_DATA => Ok(beacon_get_output_data as *const () as usize),
 
         // Token
-        3202664826u32 => Ok(beacon_is_admin as *const () as usize),
-        233171701u32 => Ok(beacon_use_token as *const () as usize),
-        2754379686u32 => Ok(beacon_rever_token as *const () as usize),
+        H_BEACON_IS_ADMIN => Ok(beacon_is_admin as *const () as usize),
+        H_BEACON_USE_TOKEN => Ok(beacon_use_token as *const () as usize),
+        H_BEACON_REVERT_TOKEN => Ok(beacon_rever_token as *const () as usize),
 
         // Format
-        1870274128u32 => Ok(beacon_format_int as *const () as usize),
-        1617256401u32 => Ok(beacon_format_free as *const () as usize),
-        687949845u32 => Ok(beacon_format_alloc as *const () as usize),
-        305071883u32 => Ok(beacon_format_reset as *const () as usize),
-        2824797381u32 => Ok(beacon_formt_printf as *const () as usize),
-        814630661u32 => Ok(beacon_format_append as *const () as usize),
-        2821454172u32 => Ok(beacon_format_to_string as *const () as usize),
+        H_BEACON_FORMAT_INT => Ok(beacon_format_int as *const () as usize),
+        H_BEACON_FORMAT_FREE => Ok(beacon_format_free as *const () as usize),
+        H_BEACON_FORMAT_ALLOC => Ok(beacon_format_alloc as *const () as usize),
+        H_BEACON_FORMAT_RESET => Ok(beacon_format_reset as *const () as usize),
+        H_BEACON_FORMAT_PRINTF => Ok(beacon_formt_printf as *const () as usize),
+        H_BEACON_FORMAT_APPEND => Ok(beacon_format_append as *const () as usize),
+        H_BEACON_FORMAT_TO_STRING => Ok(beacon_format_to_string as *const () as usize),
 
         // Process / injection
-        3748796315u32 => Ok(beacon_get_spawn_to as *const () as usize),
-        1991785755u32 => Ok(beacon_inject_process as *const () as usize),
-        2335479872u32 => Ok(beacon_cleanup_process as *const () as usize),
-        2755057638u32 => Ok(beacon_spawn_temporary_process as *const () as usize),
-        131483084u32 => Ok(beacon_inject_temporary_process as *const () as usize),
+        H_BEACON_GET_SPAWN_TO => Ok(beacon_get_spawn_to as *const () as usize),
+        H_BEACON_INJECT_PROCESS => Ok(beacon_inject_process as *const () as usize),
+        H_BEACON_CLEANUP_PROCESS => Ok(beacon_cleanup_process as *const () as usize),
+        H_BEACON_SPAWN_TEMPORARY_PROCESS => Ok(beacon_spawn_temporary_process as *const () as usize),
+        H_BEACON_INJECT_TEMPORARY_PROCESS => Ok(beacon_inject_temporary_process as *const () as usize),
 
         // Data
-        1942020652u32 => Ok(beacon_data_int as *const () as usize),
-        1136370979u32 => Ok(beacon_data_short as *const () as usize),
-        709123669u32 => Ok(beacon_data_parse as *const () as usize),
-        2194280572u32 => Ok(beacon_data_length as *const () as usize),
-        596399976u32 => Ok(beacon_data_extract as *const () as usize),
-        275872794u32 => Ok(beacon_data_ptr as *const () as usize),
+        H_BEACON_DATA_INT => Ok(beacon_data_int as *const () as usize),
+        H_BEACON_DATA_SHORT => Ok(beacon_data_short as *const () as usize),
+        H_BEACON_DATA_PARSE => Ok(beacon_data_parse as *const () as usize),
+        H_BEACON_DATA_LENGTH => Ok(beacon_data_length as *const () as usize),
+        H_BEACON_DATA_EXTRACT => Ok(beacon_data_extract as *const () as usize),
+        H_BEACON_DATA_PTR => Ok(beacon_data_ptr as *const () as usize),
 
         // Utils
-        2580203873u32 => Ok(to_wide_char as *const () as usize),
-        3816160102u32 => Ok(0),
+        H_TO_WIDE_CHAR => Ok(to_wide_char as *const () as usize),
+        H_BEACON_INFORMATION => Ok(0),
         _ => Err(CoffeeLdrError::FunctionInternalNotFound(name.to_string())),
     }
 }
