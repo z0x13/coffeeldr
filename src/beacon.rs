@@ -54,6 +54,43 @@ static BEACON_BUFFER: Mutex<BeaconOutputBuffer> = Mutex::new(BeaconOutputBuffer:
 /// Global key-value store for BOF inter-call data sharing.
 static BEACON_KV_STORE: Mutex<BTreeMap<String, usize>> = Mutex::new(BTreeMap::new());
 
+/// Maximum number of data store entries.
+pub const DATA_STORE_MAX_ENTRIES: usize = 16;
+
+/// Data store type constants.
+pub const DATA_STORE_TYPE_EMPTY: i32 = 0;
+#[allow(dead_code)]
+pub const DATA_STORE_TYPE_GENERAL_FILE: i32 = 1;
+
+/// Data store object structure matching Cobalt Strike's DATA_STORE_OBJECT.
+#[repr(C)]
+pub struct DataStoreObject {
+    pub obj_type: i32,
+    pub hash: u64,
+    pub masked: i32,
+    pub buffer: *mut c_char,
+    pub length: usize,
+}
+
+impl DataStoreObject {
+    const fn empty() -> Self {
+        Self {
+            obj_type: DATA_STORE_TYPE_EMPTY,
+            hash: 0,
+            masked: 0,
+            buffer: null_mut(),
+            length: 0,
+        }
+    }
+}
+
+// SAFETY: DataStoreObject is protected by a Mutex and only accessed through controlled APIs.
+unsafe impl Send for DataStoreObject {}
+unsafe impl Sync for DataStoreObject {}
+
+/// Global data store for BOF file/data sharing.
+static BEACON_DATA_STORE: Mutex<[DataStoreObject; DATA_STORE_MAX_ENTRIES]> = Mutex::new([const { DataStoreObject::empty() }; DATA_STORE_MAX_ENTRIES]);
+
 /// A buffer used for managing and collecting output for the beacon.
 #[repr(C)]
 #[derive(Debug, Clone)]
@@ -190,6 +227,10 @@ const H_BEACON_UNMAP_VIEW_OF_FILE: u32 = murmur3!("BeaconUnmapViewOfFile");
 const H_BEACON_DUPLICATE_HANDLE: u32 = murmur3!("BeaconDuplicateHandle");
 const H_BEACON_READ_PROCESS_MEMORY: u32 = murmur3!("BeaconReadProcessMemory");
 const H_BEACON_WRITE_PROCESS_MEMORY: u32 = murmur3!("BeaconWriteProcessMemory");
+const H_BEACON_DATA_STORE_GET_ITEM: u32 = murmur3!("BeaconDataStoreGetItem");
+const H_BEACON_DATA_STORE_PROTECT_ITEM: u32 = murmur3!("BeaconDataStoreProtectItem");
+const H_BEACON_DATA_STORE_UNPROTECT_ITEM: u32 = murmur3!("BeaconDataStoreUnprotectItem");
+const H_BEACON_DATA_STORE_MAX_ENTRIES: u32 = murmur3!("BeaconDataStoreMaxEntries");
 
 /// Resolves the internal address of a built-in Beacon function.
 ///
@@ -263,6 +304,12 @@ pub fn get_function_internal_address(name: &str) -> Result<usize> {
         H_BEACON_DUPLICATE_HANDLE => Ok(beacon_duplicate_handle as *const () as usize),
         H_BEACON_READ_PROCESS_MEMORY => Ok(beacon_read_process_memory as *const () as usize),
         H_BEACON_WRITE_PROCESS_MEMORY => Ok(beacon_write_process_memory as *const () as usize),
+
+        // Data Store
+        H_BEACON_DATA_STORE_GET_ITEM => Ok(beacon_data_store_get_item as *const () as usize),
+        H_BEACON_DATA_STORE_PROTECT_ITEM => Ok(beacon_data_store_protect_item as *const () as usize),
+        H_BEACON_DATA_STORE_UNPROTECT_ITEM => Ok(beacon_data_store_unprotect_item as *const () as usize),
+        H_BEACON_DATA_STORE_MAX_ENTRIES => Ok(beacon_data_store_max_entries as *const () as usize),
 
         _ => Err(CoffeeLdrError::FunctionInternalNotFound(name.to_string())),
     }
@@ -960,4 +1007,72 @@ fn beacon_write_process_memory(
     bytes_written: *mut usize,
 ) -> i32 {
     unsafe { WriteProcessMemory(process, base_address, buffer, size, bytes_written) }
+}
+
+/// Returns a pointer to the DataStoreObject at the specified index.
+/// Returns NULL if index is out of bounds or entry is empty.
+fn beacon_data_store_get_item(index: usize) -> *mut DataStoreObject {
+    if index >= DATA_STORE_MAX_ENTRIES {
+        return null_mut();
+    }
+
+    let store = BEACON_DATA_STORE.lock();
+    let item = &store[index];
+
+    if item.obj_type == DATA_STORE_TYPE_EMPTY {
+        return null_mut();
+    }
+
+    item as *const DataStoreObject as *mut DataStoreObject
+}
+
+/// XOR masks the buffer of the DataStoreObject at the specified index.
+fn beacon_data_store_protect_item(index: usize) {
+    if index >= DATA_STORE_MAX_ENTRIES {
+        return;
+    }
+
+    let mut store = BEACON_DATA_STORE.lock();
+    let item = &mut store[index];
+
+    if item.obj_type == DATA_STORE_TYPE_EMPTY || item.buffer.is_null() || item.masked != 0 {
+        return;
+    }
+
+    let key_bytes = item.hash.to_le_bytes();
+    let buffer = unsafe { core::slice::from_raw_parts_mut(item.buffer as *mut u8, item.length) };
+
+    for (i, byte) in buffer.iter_mut().enumerate() {
+        *byte ^= key_bytes[i % 8];
+    }
+
+    item.masked = 1;
+}
+
+/// Unmasks the buffer of the DataStoreObject at the specified index.
+fn beacon_data_store_unprotect_item(index: usize) {
+    if index >= DATA_STORE_MAX_ENTRIES {
+        return;
+    }
+
+    let mut store = BEACON_DATA_STORE.lock();
+    let item = &mut store[index];
+
+    if item.obj_type == DATA_STORE_TYPE_EMPTY || item.buffer.is_null() || item.masked == 0 {
+        return;
+    }
+
+    let key_bytes = item.hash.to_le_bytes();
+    let buffer = unsafe { core::slice::from_raw_parts_mut(item.buffer as *mut u8, item.length) };
+
+    for (i, byte) in buffer.iter_mut().enumerate() {
+        *byte ^= key_bytes[i % 8];
+    }
+
+    item.masked = 0;
+}
+
+/// Returns the maximum number of data store entries.
+fn beacon_data_store_max_entries() -> usize {
+    DATA_STORE_MAX_ENTRIES
 }
