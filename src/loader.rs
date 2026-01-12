@@ -23,6 +23,7 @@ use core::{
 
 use log::{debug, info, warn};
 use obfstr::{obfstr as obf, obfstring as s};
+use const_hashes::murmur3;
 use dinvk::{dinvoke, helper::PE, types::NTSTATUS};
 use dinvk::module::{
     get_proc_address, 
@@ -476,6 +477,41 @@ impl CoffSymbol {
     ///
     /// Fails when the symbol cannot be parsed, module cannot be loaded,
     /// or the export cannot be found.
+    const FALLBACK_KERNEL32: &'static [(u32, &'static str)] = &[
+        (murmur3!("LoadLibraryA"), "kernel32"),
+        (murmur3!("LoadLibraryW"), "kernel32"),
+        (murmur3!("FreeLibrary"), "kernel32"),
+        (murmur3!("GetProcAddress"), "kernel32"),
+        (murmur3!("GetModuleHandleA"), "kernel32"),
+        (murmur3!("GetModuleHandleW"), "kernel32"),
+        (murmur3!("GetModuleFileNameA"), "kernel32"),
+        (murmur3!("GetModuleFileNameW"), "kernel32"),
+        (murmur3!("VirtualAlloc"), "kernel32"),
+        (murmur3!("VirtualFree"), "kernel32"),
+        (murmur3!("VirtualProtect"), "kernel32"),
+        (murmur3!("GetLastError"), "kernel32"),
+        (murmur3!("SetLastError"), "kernel32"),
+        (murmur3!("GetCurrentProcess"), "kernel32"),
+        (murmur3!("GetCurrentThread"), "kernel32"),
+        (murmur3!("GetCurrentProcessId"), "kernel32"),
+        (murmur3!("GetCurrentThreadId"), "kernel32"),
+        (murmur3!("CloseHandle"), "kernel32"),
+        (murmur3!("HeapAlloc"), "kernel32"),
+        (murmur3!("HeapFree"), "kernel32"),
+        (murmur3!("HeapReAlloc"), "kernel32"),
+        (murmur3!("GetProcessHeap"), "kernel32"),
+        (murmur3!("MessageBoxA"), "user32"),
+        (murmur3!("MessageBoxW"), "user32"),
+    ];
+
+    fn get_fallback_dll(function: &str) -> Option<&'static str> {
+        let hash = const_hashes::runtime::murmur3(function);
+        Self::FALLBACK_KERNEL32
+            .iter()
+            .find(|(h, _)| *h == hash)
+            .map(|(_, dll)| *dll)
+    }
+
     fn resolve_symbol_address(name: &str, coff: &Coff) -> Result<usize> {
         debug!("Attempting to resolve address for symbol: {}", name);
 
@@ -492,6 +528,11 @@ impl CoffSymbol {
 
             if let Some((dll, function)) = symbol_name.split_once('$') {
                 return Self::resolve_dll_function(dll, function, coff);
+            }
+
+            if let Some(dll) = Self::get_fallback_dll(symbol_name) {
+                debug!("Fallback: {} -> {}", symbol_name, dll);
+                return Self::resolve_dll_function(dll, symbol_name, coff);
             }
         }
 
