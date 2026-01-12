@@ -468,30 +468,42 @@ impl CoffSymbol {
 
     /// Resolves a symbol name to an address: Beacon helpers or DLL exports.
     ///
+    /// Supports two symbol formats:
+    /// - `__imp_BeaconXxx` or `__imp_toWideChar` → Beacon API
+    /// - `MODULE$Function` → WinAPI (e.g., `KERNEL32$GetLastError`)
+    ///
     /// # Errors
     ///
     /// Fails when the symbol cannot be parsed, module cannot be loaded,
     /// or the export cannot be found.
     fn resolve_symbol_address(name: &str, coff: &Coff) -> Result<usize> {
         debug!("Attempting to resolve address for symbol: {}", name);
+
         let prefix = match coff.arch {
             CoffMachine::X64 => "__imp_",
             CoffMachine::X32 => "__imp__",
         };
 
-        let symbol_name = name
-            .strip_prefix(prefix)
-            .map_or_else(|| Err(CoffeeLdrError::SymbolIgnored), Ok)?;
+        if let Some(symbol_name) = name.strip_prefix(prefix) {
+            if symbol_name.starts_with(obf!("Beacon")) || symbol_name.starts_with(obf!("toWideChar")) {
+                debug!("Resolving Beacon: {}", symbol_name);
+                return get_function_internal_address(symbol_name);
+            }
 
-        if symbol_name.starts_with(obf!("Beacon")) || symbol_name.starts_with(obf!("toWideChar")) {
-            debug!("Resolving Beacon: {}", symbol_name);
-            return get_function_internal_address(symbol_name);
+            if let Some((dll, function)) = symbol_name.split_once('$') {
+                return Self::resolve_dll_function(dll, function, coff);
+            }
         }
 
-        let (dll, mut function) = symbol_name
-            .split_once('$')
-            .ok_or_else(|| CoffeeLdrError::ParseError(symbol_name.to_string()))?;
+        if let Some((dll, function)) = name.split_once('$') {
+            return Self::resolve_dll_function(dll, function, coff);
+        }
 
+        Err(CoffeeLdrError::SymbolIgnored)
+    }
+
+    /// Resolves a DLL export by module name and function name.
+    fn resolve_dll_function(dll: &str, mut function: &str, coff: &Coff) -> Result<usize> {
         if let CoffMachine::X32 = coff.arch {
             function = function.split('@').next().unwrap_or(function);
         }
@@ -513,7 +525,7 @@ impl CoffSymbol {
 
         let addr = get_proc_address(module, function, None);
         if addr.is_null() {
-            Err(CoffeeLdrError::FunctionNotFound(symbol_name.to_string()))
+            Err(CoffeeLdrError::FunctionNotFound(function.to_string()))
         } else {
             Ok(addr as usize)
         }
