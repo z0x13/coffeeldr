@@ -17,21 +17,30 @@ use dinvk::{winapis::NtCurrentProcess, syscall};
 use dinvk::types::OBJECT_ATTRIBUTES;
 use windows_sys::Win32::{
     Security::*,
-    Foundation::{CloseHandle, HANDLE, STATUS_SUCCESS},
+    Foundation::{CloseHandle, DuplicateHandle, HANDLE, STATUS_SUCCESS},
     System::{
         Threading::*,
         WindowsProgramming::CLIENT_ID,
+        Diagnostics::Debug::{
+            GetThreadContext,
+            SetThreadContext,
+            ReadProcessMemory,
+            WriteProcessMemory,
+            CONTEXT,
+        },
         Memory::{
             MEM_COMMIT,
             MEM_RESERVE,
             PAGE_EXECUTE_READWRITE,
             MEMORY_BASIC_INFORMATION,
+            MEMORY_MAPPED_VIEW_ADDRESS,
             VirtualAlloc,
             VirtualAllocEx,
             VirtualProtect,
             VirtualProtectEx,
             VirtualFree,
             VirtualQuery,
+            UnmapViewOfFile,
         },
     },
 };
@@ -171,6 +180,16 @@ const H_BEACON_VIRTUAL_PROTECT: u32 = murmur3!("BeaconVirtualProtect");
 const H_BEACON_VIRTUAL_PROTECT_EX: u32 = murmur3!("BeaconVirtualProtectEx");
 const H_BEACON_VIRTUAL_FREE: u32 = murmur3!("BeaconVirtualFree");
 const H_BEACON_VIRTUAL_QUERY: u32 = murmur3!("BeaconVirtualQuery");
+const H_BEACON_GET_THREAD_CONTEXT: u32 = murmur3!("BeaconGetThreadContext");
+const H_BEACON_SET_THREAD_CONTEXT: u32 = murmur3!("BeaconSetThreadContext");
+const H_BEACON_RESUME_THREAD: u32 = murmur3!("BeaconResumeThread");
+const H_BEACON_OPEN_PROCESS: u32 = murmur3!("BeaconOpenProcess");
+const H_BEACON_OPEN_THREAD: u32 = murmur3!("BeaconOpenThread");
+const H_BEACON_CLOSE_HANDLE: u32 = murmur3!("BeaconCloseHandle");
+const H_BEACON_UNMAP_VIEW_OF_FILE: u32 = murmur3!("BeaconUnmapViewOfFile");
+const H_BEACON_DUPLICATE_HANDLE: u32 = murmur3!("BeaconDuplicateHandle");
+const H_BEACON_READ_PROCESS_MEMORY: u32 = murmur3!("BeaconReadProcessMemory");
+const H_BEACON_WRITE_PROCESS_MEMORY: u32 = murmur3!("BeaconWriteProcessMemory");
 
 /// Resolves the internal address of a built-in Beacon function.
 ///
@@ -232,6 +251,18 @@ pub fn get_function_internal_address(name: &str) -> Result<usize> {
         H_BEACON_VIRTUAL_PROTECT_EX => Ok(beacon_virtual_protect_ex as *const () as usize),
         H_BEACON_VIRTUAL_FREE => Ok(beacon_virtual_free as *const () as usize),
         H_BEACON_VIRTUAL_QUERY => Ok(beacon_virtual_query as *const () as usize),
+
+        // Thread/process/handle wrappers
+        H_BEACON_GET_THREAD_CONTEXT => Ok(beacon_get_thread_context as *const () as usize),
+        H_BEACON_SET_THREAD_CONTEXT => Ok(beacon_set_thread_context as *const () as usize),
+        H_BEACON_RESUME_THREAD => Ok(beacon_resume_thread as *const () as usize),
+        H_BEACON_OPEN_PROCESS => Ok(beacon_open_process as *const () as usize),
+        H_BEACON_OPEN_THREAD => Ok(beacon_open_thread as *const () as usize),
+        H_BEACON_CLOSE_HANDLE => Ok(beacon_close_handle as *const () as usize),
+        H_BEACON_UNMAP_VIEW_OF_FILE => Ok(beacon_unmap_view_of_file as *const () as usize),
+        H_BEACON_DUPLICATE_HANDLE => Ok(beacon_duplicate_handle as *const () as usize),
+        H_BEACON_READ_PROCESS_MEMORY => Ok(beacon_read_process_memory as *const () as usize),
+        H_BEACON_WRITE_PROCESS_MEMORY => Ok(beacon_write_process_memory as *const () as usize),
 
         _ => Err(CoffeeLdrError::FunctionInternalNotFound(name.to_string())),
     }
@@ -838,4 +869,95 @@ fn beacon_virtual_query(
     length: usize,
 ) -> usize {
     unsafe { VirtualQuery(address, buffer, length) }
+}
+
+/// Gets the context of the specified thread.
+/// Proxy to kernel32!GetThreadContext.
+fn beacon_get_thread_context(thread: HANDLE, context: *mut CONTEXT) -> i32 {
+    unsafe { GetThreadContext(thread, context) }
+}
+
+/// Sets the context of the specified thread.
+/// Proxy to kernel32!SetThreadContext.
+fn beacon_set_thread_context(thread: HANDLE, context: *const CONTEXT) -> i32 {
+    unsafe { SetThreadContext(thread, context) }
+}
+
+/// Resumes the specified thread.
+/// Proxy to kernel32!ResumeThread.
+fn beacon_resume_thread(thread: HANDLE) -> u32 {
+    unsafe { ResumeThread(thread) }
+}
+
+/// Opens an existing process object.
+/// Proxy to kernel32!OpenProcess.
+fn beacon_open_process(desired_access: u32, inherit_handle: i32, process_id: u32) -> HANDLE {
+    unsafe { OpenProcess(desired_access, inherit_handle, process_id) }
+}
+
+/// Opens an existing thread object.
+/// Proxy to kernel32!OpenThread.
+fn beacon_open_thread(desired_access: u32, inherit_handle: i32, thread_id: u32) -> HANDLE {
+    unsafe { OpenThread(desired_access, inherit_handle, thread_id) }
+}
+
+/// Closes an open object handle.
+/// Proxy to kernel32!CloseHandle.
+fn beacon_close_handle(handle: HANDLE) -> i32 {
+    unsafe { CloseHandle(handle) }
+}
+
+/// Unmaps a mapped view of a file from the calling process's address space.
+/// Proxy to kernel32!UnmapViewOfFile.
+fn beacon_unmap_view_of_file(base_address: *const c_void) -> i32 {
+    let addr = MEMORY_MAPPED_VIEW_ADDRESS { Value: base_address as *mut c_void };
+    unsafe { UnmapViewOfFile(addr) }
+}
+
+/// Duplicates an object handle.
+/// Proxy to kernel32!DuplicateHandle.
+fn beacon_duplicate_handle(
+    source_process: HANDLE,
+    source_handle: HANDLE,
+    target_process: HANDLE,
+    target_handle: *mut HANDLE,
+    desired_access: u32,
+    inherit_handle: i32,
+    options: u32,
+) -> i32 {
+    unsafe {
+        DuplicateHandle(
+            source_process,
+            source_handle,
+            target_process,
+            target_handle,
+            desired_access,
+            inherit_handle,
+            options,
+        )
+    }
+}
+
+/// Reads data from an area of memory in a specified process.
+/// Proxy to kernel32!ReadProcessMemory.
+fn beacon_read_process_memory(
+    process: HANDLE,
+    base_address: *const c_void,
+    buffer: *mut c_void,
+    size: usize,
+    bytes_read: *mut usize,
+) -> i32 {
+    unsafe { ReadProcessMemory(process, base_address, buffer, size, bytes_read) }
+}
+
+/// Writes data to an area of memory in a specified process.
+/// Proxy to kernel32!WriteProcessMemory.
+fn beacon_write_process_memory(
+    process: HANDLE,
+    base_address: *mut c_void,
+    buffer: *const c_void,
+    size: usize,
+    bytes_written: *mut usize,
+) -> i32 {
+    unsafe { WriteProcessMemory(process, base_address, buffer, size, bytes_written) }
 }
