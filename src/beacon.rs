@@ -22,9 +22,16 @@ use windows_sys::Win32::{
         Threading::*,
         WindowsProgramming::CLIENT_ID,
         Memory::{
-            MEM_COMMIT, 
-            MEM_RESERVE, 
-            PAGE_EXECUTE_READWRITE
+            MEM_COMMIT,
+            MEM_RESERVE,
+            PAGE_EXECUTE_READWRITE,
+            MEMORY_BASIC_INFORMATION,
+            VirtualAlloc,
+            VirtualAllocEx,
+            VirtualProtect,
+            VirtualProtectEx,
+            VirtualFree,
+            VirtualQuery,
         },
     },
 };
@@ -158,6 +165,12 @@ const H_BEACON_INFORMATION: u32 = murmur3!("BeaconInformation");
 const H_BEACON_ADD_VALUE: u32 = murmur3!("BeaconAddValue");
 const H_BEACON_GET_VALUE: u32 = murmur3!("BeaconGetValue");
 const H_BEACON_REMOVE_VALUE: u32 = murmur3!("BeaconRemoveValue");
+const H_BEACON_VIRTUAL_ALLOC: u32 = murmur3!("BeaconVirtualAlloc");
+const H_BEACON_VIRTUAL_ALLOC_EX: u32 = murmur3!("BeaconVirtualAllocEx");
+const H_BEACON_VIRTUAL_PROTECT: u32 = murmur3!("BeaconVirtualProtect");
+const H_BEACON_VIRTUAL_PROTECT_EX: u32 = murmur3!("BeaconVirtualProtectEx");
+const H_BEACON_VIRTUAL_FREE: u32 = murmur3!("BeaconVirtualFree");
+const H_BEACON_VIRTUAL_QUERY: u32 = murmur3!("BeaconVirtualQuery");
 
 /// Resolves the internal address of a built-in Beacon function.
 ///
@@ -211,6 +224,14 @@ pub fn get_function_internal_address(name: &str) -> Result<usize> {
         H_BEACON_ADD_VALUE => Ok(beacon_add_value as *const () as usize),
         H_BEACON_GET_VALUE => Ok(beacon_get_value as *const () as usize),
         H_BEACON_REMOVE_VALUE => Ok(beacon_remove_value as *const () as usize),
+
+        // Alloc wrappers
+        H_BEACON_VIRTUAL_ALLOC => Ok(beacon_virtual_alloc as *const () as usize),
+        H_BEACON_VIRTUAL_ALLOC_EX => Ok(beacon_virtual_alloc_ex as *const () as usize),
+        H_BEACON_VIRTUAL_PROTECT => Ok(beacon_virtual_protect as *const () as usize),
+        H_BEACON_VIRTUAL_PROTECT_EX => Ok(beacon_virtual_protect_ex as *const () as usize),
+        H_BEACON_VIRTUAL_FREE => Ok(beacon_virtual_free as *const () as usize),
+        H_BEACON_VIRTUAL_QUERY => Ok(beacon_virtual_query as *const () as usize),
 
         _ => Err(CoffeeLdrError::FunctionInternalNotFound(name.to_string())),
     }
@@ -755,4 +776,66 @@ fn beacon_remove_value(key: *const c_char) -> i32 {
 
     let mut store = BEACON_KV_STORE.lock();
     if store.remove(key_str).is_some() { 1 } else { 0 }
+}
+
+/// Allocates virtual memory in the current process.
+/// Proxy to kernel32!VirtualAlloc.
+fn beacon_virtual_alloc(
+    address: *mut c_void,
+    size: usize,
+    alloc_type: u32,
+    protect: u32,
+) -> *mut c_void {
+    unsafe { VirtualAlloc(address, size, alloc_type, protect) }
+}
+
+/// Allocates virtual memory in the specified process.
+/// Proxy to kernel32!VirtualAllocEx.
+fn beacon_virtual_alloc_ex(
+    process: HANDLE,
+    address: *mut c_void,
+    size: usize,
+    alloc_type: u32,
+    protect: u32,
+) -> *mut c_void {
+    unsafe { VirtualAllocEx(process, address, size, alloc_type, protect) }
+}
+
+/// Changes protection on a region of virtual memory in the current process.
+/// Proxy to kernel32!VirtualProtect.
+fn beacon_virtual_protect(
+    address: *mut c_void,
+    size: usize,
+    new_protect: u32,
+    old_protect: *mut u32,
+) -> i32 {
+    unsafe { VirtualProtect(address, size, new_protect, old_protect) }
+}
+
+/// Changes protection on a region of virtual memory in the specified process.
+/// Proxy to kernel32!VirtualProtectEx.
+fn beacon_virtual_protect_ex(
+    process: HANDLE,
+    address: *mut c_void,
+    size: usize,
+    new_protect: u32,
+    old_protect: *mut u32,
+) -> i32 {
+    unsafe { VirtualProtectEx(process, address, size, new_protect, old_protect) }
+}
+
+/// Releases or decommits virtual memory in the current process.
+/// Proxy to kernel32!VirtualFree.
+fn beacon_virtual_free(address: *mut c_void, size: usize, free_type: u32) -> i32 {
+    unsafe { VirtualFree(address, size, free_type) }
+}
+
+/// Queries information about a region of virtual memory.
+/// Proxy to kernel32!VirtualQuery.
+fn beacon_virtual_query(
+    address: *const c_void,
+    buffer: *mut MEMORY_BASIC_INFORMATION,
+    length: usize,
+) -> usize {
+    unsafe { VirtualQuery(address, buffer, length) }
 }
