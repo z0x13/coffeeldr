@@ -968,6 +968,7 @@ fn LoadLibraryExA(
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
     use crate::{*, error::Result};
 
     #[test]
