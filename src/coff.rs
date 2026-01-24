@@ -1,10 +1,10 @@
 //! COFF parsing utilities for the CoffeeLdr loader.
 
-use core::ffi::c_void;
 use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
+use core::ffi::c_void;
 
 use log::{debug, warn};
 
@@ -69,8 +69,8 @@ impl<'a> Coff<'a> {
         }
 
         // The COFF file header
-        let file_header = IMAGE_FILE_HEADER::from_bytes(buffer)
-            .ok_or(CoffError::InvalidCoffFile)?;
+        let file_header =
+            IMAGE_FILE_HEADER::from_bytes(buffer).ok_or(CoffError::InvalidCoffFile)?;
 
         // Detects the architecture of the COFF file and returns an enum `CoffMachine`
         let arch = Self::validate_architecture(file_header)?;
@@ -84,29 +84,45 @@ impl<'a> Coff<'a> {
 
         // Validation of the maximum number of sections (Windows limit)
         if num_sections > MAX_SECTIONS {
-            warn!("Exceeded maximum number of sections: {} > {}", num_sections, MAX_SECTIONS);
+            warn!(
+                "Exceeded maximum number of sections: {} > {}",
+                num_sections, MAX_SECTIONS
+            );
             return Err(CoffError::SectionLimitExceeded);
         }
 
         // A vector of COFF symbols
         let symbol_offset = file_header.PointerToSymbolTable as usize;
-        let symbol_data = buffer.get(symbol_offset..).ok_or(CoffError::InvalidCoffSymbolsFile)?;
+        let symbol_data = buffer
+            .get(symbol_offset..)
+            .ok_or(CoffError::InvalidCoffSymbolsFile)?;
         let symbols = (0..num_symbols as usize)
             .map(|i| {
                 let offset = i * size_of::<IMAGE_SYMBOL>();
-                IMAGE_SYMBOL::from_bytes(symbol_data.get(offset..).ok_or(CoffError::InvalidCoffSymbolsFile)?)
-                    .ok_or(CoffError::InvalidCoffSymbolsFile)
+                IMAGE_SYMBOL::from_bytes(
+                    symbol_data
+                        .get(offset..)
+                        .ok_or(CoffError::InvalidCoffSymbolsFile)?,
+                )
+                .ok_or(CoffError::InvalidCoffSymbolsFile)
             })
             .collect::<Result<Vec<IMAGE_SYMBOL>, _>>()?;
 
         // A vector of COFF sections
-        let section_offset = size_of::<IMAGE_FILE_HEADER>() + file_header.SizeOfOptionalHeader as usize;
-        let section_data = buffer.get(section_offset..).ok_or(CoffError::InvalidCoffSectionFile)?;
+        let section_offset =
+            size_of::<IMAGE_FILE_HEADER>() + file_header.SizeOfOptionalHeader as usize;
+        let section_data = buffer
+            .get(section_offset..)
+            .ok_or(CoffError::InvalidCoffSectionFile)?;
         let sections = (0..num_sections as usize)
             .map(|i| {
                 let offset = i * size_of::<IMAGE_SECTION_HEADER>();
-                IMAGE_SECTION_HEADER::from_bytes(section_data.get(offset..).ok_or(CoffError::InvalidCoffSectionFile)?)
-                    .ok_or(CoffError::InvalidCoffSectionFile)
+                IMAGE_SECTION_HEADER::from_bytes(
+                    section_data
+                        .get(offset..)
+                        .ok_or(CoffError::InvalidCoffSectionFile)?,
+                )
+                .ok_or(CoffError::InvalidCoffSectionFile)
             })
             .collect::<Result<Vec<IMAGE_SECTION_HEADER>, _>>()?;
 
@@ -181,7 +197,10 @@ impl<'a> Coff<'a> {
 
         for i in 0..num_relocs {
             let offset = i * size_of::<IMAGE_RELOCATION>();
-            match reloc_data.get(offset..).and_then(IMAGE_RELOCATION::from_bytes) {
+            match reloc_data
+                .get(offset..)
+                .and_then(IMAGE_RELOCATION::from_bytes)
+            {
                 Some(reloc) => relocations.push(reloc),
                 None => {
                     debug!("Failed to read relocation at index {i}");
@@ -208,7 +227,10 @@ impl<'a> Coff<'a> {
                     return String::new();
                 };
 
-                let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
+                let end = name_bytes
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(name_bytes.len());
                 String::from_utf8_lossy(&name_bytes[..end]).into_owned()
             }
         };
@@ -387,7 +409,9 @@ impl IMAGE_SYMBOL {
             Type: u16::from_le_bytes([bytes[14], bytes[15]]),
             StorageClass: bytes[16],
             NumberOfAuxSymbols: bytes[17],
-            N: IMAGE_SYMBOL_0 { ShortName: name_raw },
+            N: IMAGE_SYMBOL_0 {
+                ShortName: name_raw,
+            },
         })
     }
 }

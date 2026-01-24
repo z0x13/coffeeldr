@@ -8,10 +8,10 @@
 extern crate alloc;
 
 mod beacon;
-mod loader;
 mod beacon_pack;
 pub mod coff;
 pub mod error;
+mod loader;
 
-pub use loader::CoffeeLdr;
 pub use beacon_pack::BeaconPack;
+pub use loader::CoffeeLdr;

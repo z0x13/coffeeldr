@@ -1,6 +1,6 @@
+use crate::error::Result;
 use alloc::vec::Vec;
 use hex::FromHex;
-use crate::error::Result;
 
 /// Buffer used to build Beacon-compatible packed arguments.
 ///

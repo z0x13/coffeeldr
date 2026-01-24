@@ -1,61 +1,46 @@
 use alloc::{
     boxed::Box,
     collections::BTreeMap,
-    ffi::CString, 
+    ffi::CString,
     format,
     string::{String, ToString},
-    vec::Vec,
     vec,
+    vec::Vec,
 };
-use core::intrinsics::{
-    volatile_copy_nonoverlapping_memory, 
-    volatile_set_memory
-};
+use core::intrinsics::{volatile_copy_nonoverlapping_memory, volatile_set_memory};
 use core::{
     ffi::c_void,
     mem::transmute,
-    ptr::{
-        null_mut, 
-        read_unaligned, 
-        write_unaligned
-    },
+    ptr::{null_mut, read_unaligned, write_unaligned},
 };
 
+use const_hashes::murmur3;
+use dinvk::module::{get_module_address, get_ntdll_address, get_proc_address};
+use dinvk::winapis::{
+    LoadLibraryA, NT_SUCCESS, NtAllocateVirtualMemory, NtCurrentProcess, NtProtectVirtualMemory,
+};
+use dinvk::{dinvoke, helper::PE, types::NTSTATUS};
 use log::{debug, info, warn};
 use obfstr::{obfstr as obf, obfstring as s};
-use const_hashes::murmur3;
-use dinvk::{dinvoke, helper::PE, types::NTSTATUS};
-use dinvk::module::{
-    get_proc_address, 
-    get_module_address, 
-    get_ntdll_address
-};
-use dinvk::winapis::{
-    NT_SUCCESS, NtProtectVirtualMemory,
-    NtAllocateVirtualMemory, NtCurrentProcess,
-    LoadLibraryA,
-};
 use windows_sys::Win32::{
     Foundation::*,
     Storage::FileSystem::*,
     System::{
-        Memory::*,
+        Diagnostics::Debug::*, LibraryLoader::DONT_RESOLVE_DLL_REFERENCES, Memory::*,
         SystemServices::*,
-        Diagnostics::Debug::*,
-        LibraryLoader::DONT_RESOLVE_DLL_REFERENCES,
     },
 };
 
-use crate::error::{CoffError, CoffeeLdrError, Result};
-use crate::coff::{Coff, CoffMachine, CoffSource};
-use crate::coff::{IMAGE_RELOCATION, IMAGE_SYMBOL}; 
 use crate::beacon::{get_function_internal_address, get_output_data};
+use crate::coff::{Coff, CoffMachine, CoffSource};
+use crate::coff::{IMAGE_RELOCATION, IMAGE_SYMBOL};
+use crate::error::{CoffError, CoffeeLdrError, Result};
 
 /// Type alias for the COFF main input function.
 type CoffMain = extern "C" fn(*mut u8, usize);
 
 /// Represents a Rust interface to the COFF (Common Object File Format) files.
-/// 
+///
 /// # Examples
 ///
 /// Using a file as a source:
@@ -106,7 +91,7 @@ pub struct CoffeeLdr<'a> {
 impl<'a> CoffeeLdr<'a> {
     /// Creates a new COFF loader from a file path or raw buffer.
     ///
-    /// The source is parsed immediately. If the file cannot be 
+    /// The source is parsed immediately. If the file cannot be
     /// read or the COFF format is invalid, an error is returned.
     ///
     /// # Errors
@@ -124,8 +109,8 @@ impl<'a> CoffeeLdr<'a> {
             CoffSource::File(path) => {
                 info!("Try to read the file: {path}");
                 // Try reading the file
-                let buffer = read_file(path)
-                    .map_err(|_| CoffError::FileReadError(path.to_string()))?;
+                let buffer =
+                    read_file(path).map_err(|_| CoffError::FileReadError(path.to_string()))?;
 
                 // Creates the COFF object from the buffer
                 Coff::parse(Box::leak(buffer.into_boxed_slice()))?
@@ -183,9 +168,14 @@ impl<'a> CoffeeLdr<'a> {
         for symbol in &self.coff.symbols {
             let name = self.coff.get_symbol_name(symbol);
             if name == entry && Coff::is_fcn(symbol.Type) {
-                info!("Running COFF file: entry point = {}, args = {:?}, argc = {:?}", name, args, argc);
+                info!(
+                    "Running COFF file: entry point = {}, args = {:?}, argc = {:?}",
+                    name, args, argc
+                );
 
-                let section_idx = symbol.SectionNumber.checked_sub(1)
+                let section_idx = symbol
+                    .SectionNumber
+                    .checked_sub(1)
                     .and_then(|idx| usize::try_from(idx).ok())
                     .filter(|&idx| idx < self.section_map.len())
                     .ok_or_else(|| CoffeeLdrError::InvalidSymbolFormat(name.clone()))?;
@@ -246,7 +236,7 @@ impl Drop for CoffeeLdr<'_> {
         if !self.module.is_empty() {
             return;
         }
-        
+
         let mut size = 0;
         for section in self.section_map.iter_mut() {
             if !section.base.is_null() {
@@ -254,7 +244,7 @@ impl Drop for CoffeeLdr<'_> {
                     NtCurrentProcess(),
                     &mut section.base,
                     &mut size,
-                    MEM_RELEASE
+                    MEM_RELEASE,
                 );
             }
         }
@@ -264,7 +254,7 @@ impl Drop for CoffeeLdr<'_> {
                 NtCurrentProcess(),
                 unsafe { &mut *self.symbols.address },
                 &mut size,
-                MEM_RELEASE
+                MEM_RELEASE,
             );
         }
     }
@@ -282,10 +272,7 @@ struct CoffMemory<'a> {
 impl<'a> CoffMemory<'a> {
     /// Creates a memory allocator for this COFF instance.
     pub fn new(coff: &'a Coff<'a>, module: &'a str) -> Self {
-        Self {
-            coff,
-            module,
-        }
+        Self { coff, module }
     }
 
     /// Allocates memory either by stomping a module or reserving a new region.
@@ -310,19 +297,24 @@ impl<'a> CoffMemory<'a> {
         let mut size = self.coff.size();
         let mut addr = null_mut();
         let status = NtAllocateVirtualMemory(
-            NtCurrentProcess(), 
-            &mut addr, 
-            0, 
-            &mut size, 
-            MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, 
-            PAGE_READWRITE
+            NtCurrentProcess(),
+            &mut addr,
+            0,
+            &mut size,
+            MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN,
+            PAGE_READWRITE,
         );
-        
+
         if status != STATUS_SUCCESS {
-            return Err(CoffeeLdrError::MemoryAllocationError(unsafe { GetLastError() }));
+            return Err(CoffeeLdrError::MemoryAllocationError(unsafe {
+                GetLastError()
+            }));
         }
 
-        debug!("Memory successfully allocated for BOF at address: {:?}", addr);
+        debug!(
+            "Memory successfully allocated for BOF at address: {:?}",
+            addr
+        );
         let (sections, _) = SectionMap::copy_sections(addr, self.coff);
         Ok((sections, None))
     }
@@ -333,7 +325,8 @@ impl<'a> CoffMemory<'a> {
     ///
     /// Fails if the section cannot be located, resized or overwritten.
     fn alloc_with_stomping(&self) -> Result<(Vec<SectionMap>, Option<*mut c_void>)> {
-        let (mut text_address, mut size) = self.get_text_module()
+        let (mut text_address, mut size) = self
+            .get_text_module()
             .ok_or(CoffeeLdrError::StompingTextSectionNotFound)?;
 
         // If the file is larger than the space inside the .text of the target module,
@@ -344,13 +337,15 @@ impl<'a> CoffMemory<'a> {
 
         let mut old = 0;
         if !NT_SUCCESS(NtProtectVirtualMemory(
-            NtCurrentProcess(), 
-            &mut text_address, 
-            &mut size, 
-            PAGE_READWRITE, 
-            &mut old
+            NtCurrentProcess(),
+            &mut text_address,
+            &mut size,
+            PAGE_READWRITE,
+            &mut old,
         )) {
-            return Err(CoffeeLdrError::MemoryProtectionError(unsafe { GetLastError() }));
+            return Err(CoffeeLdrError::MemoryProtectionError(unsafe {
+                GetLastError()
+            }));
         }
 
         // This is necessary because REL32 instructions must remain within range, and allocating the `Symbol`
@@ -370,11 +365,7 @@ impl<'a> CoffMemory<'a> {
         let h_module = {
             let handle = get_module_address(self.module, None);
             if handle.is_null() {
-                LoadLibraryExA(
-                    target.as_ptr(),
-                    null_mut(),
-                    DONT_RESOLVE_DLL_REFERENCES
-                )?
+                LoadLibraryExA(target.as_ptr(), null_mut(), DONT_RESOLVE_DLL_REFERENCES)?
             } else {
                 handle
             }
@@ -417,7 +408,7 @@ impl CoffSymbol {
     ) -> Result<(BTreeMap<String, usize>, Self)> {
         // Resolves the symbols of the coff file
         let symbols = Self::process_symbols(coff)?;
-        
+
         // When stomping, we must reuse the memory at `base_addr`
         let address = if !module.is_empty() {
             let addr = base_addr.ok_or(CoffeeLdrError::MissingStompingBaseAddress)?;
@@ -435,7 +426,9 @@ impl CoffSymbol {
             );
 
             if addr.is_null() || status != STATUS_SUCCESS {
-                return Err(CoffeeLdrError::MemoryAllocationError(unsafe { GetLastError() }));
+                return Err(CoffeeLdrError::MemoryAllocationError(unsafe {
+                    GetLastError()
+                }));
             }
 
             addr as *mut *mut c_void
@@ -521,7 +514,9 @@ impl CoffSymbol {
         };
 
         if let Some(symbol_name) = name.strip_prefix(prefix) {
-            if symbol_name.starts_with(obf!("Beacon")) || symbol_name.starts_with(obf!("toWideChar")) {
+            if symbol_name.starts_with(obf!("Beacon"))
+                || symbol_name.starts_with(obf!("toWideChar"))
+            {
                 debug!("Resolving Beacon: {}", symbol_name);
                 return get_function_internal_address(symbol_name);
             }
@@ -573,7 +568,6 @@ impl CoffSymbol {
     }
 }
 
-
 /// Describes a mapped section of memory, including base, size and attributes.
 #[derive(Debug, Clone)]
 struct SectionMap {
@@ -607,7 +601,11 @@ impl SectionMap {
 
                     if section.PointerToRawData != 0 {
                         debug!("Copying section: {}", name);
-                        volatile_copy_nonoverlapping_memory(base as *mut u8, address.cast_mut(), size);
+                        volatile_copy_nonoverlapping_memory(
+                            base as *mut u8,
+                            address.cast_mut(),
+                            size,
+                        );
                     } else {
                         volatile_set_memory(address.cast_mut(), 0, size);
                     }
@@ -639,7 +637,8 @@ impl SectionMap {
             self.name, self.base, self.size, self.characteristics
         );
 
-        let bitmask = self.characteristics & (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE);
+        let bitmask = self.characteristics
+            & (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE);
         let mut protection = if bitmask == 0 {
             PAGE_NOACCESS
         } else if bitmask == IMAGE_SCN_MEM_EXECUTE {
@@ -667,13 +666,15 @@ impl SectionMap {
 
         let mut old = 0;
         if !NT_SUCCESS(NtProtectVirtualMemory(
-            NtCurrentProcess(), 
-            &mut self.base, 
-            &mut self.size, 
-            protection, 
-            &mut old
+            NtCurrentProcess(),
+            &mut self.base,
+            &mut self.size,
+            protection,
+            &mut old,
         )) {
-            return Err(CoffeeLdrError::MemoryProtectionError(unsafe { GetLastError() }));
+            return Err(CoffeeLdrError::MemoryProtectionError(unsafe {
+                GetLastError()
+            }));
         }
 
         Ok(())
@@ -709,7 +710,7 @@ impl<'a> CoffRelocation<'a> {
     pub fn apply_relocations(
         &self,
         functions: &BTreeMap<String, usize>,
-        symbols: &CoffSymbol
+        symbols: &CoffSymbol,
     ) -> Result<()> {
         let mut index = 0;
         for (i, section) in self.coff.sections.iter().enumerate() {
@@ -717,29 +718,32 @@ impl<'a> CoffRelocation<'a> {
             let relocations = self.coff.get_relocations(section);
             for relocation in relocations.iter() {
                 // Look up the symbol associated with the relocation
-                let symbol = self.coff.symbols.get(relocation.SymbolTableIndex as usize)
+                let symbol = self
+                    .coff
+                    .symbols
+                    .get(relocation.SymbolTableIndex as usize)
                     .ok_or(CoffError::InvalidCoffSymbolsFile)?;
 
                 // Compute the address where the relocation should be applied
-                let symbol_reloc_addr = (self.section_map[i].base as usize 
-                    + unsafe { relocation.Anonymous.VirtualAddress } as usize) as *mut c_void;
+                let symbol_reloc_addr = (self.section_map[i].base as usize
+                    + unsafe { relocation.Anonymous.VirtualAddress } as usize)
+                    as *mut c_void;
 
-                // Retrieve the symbol's name 
+                // Retrieve the symbol's name
                 let name = self.coff.get_symbol_name(symbol);
-                if let Some(function_address) = functions.get(&name).map(|&addr| addr as *mut c_void) {
+                if let Some(function_address) =
+                    functions.get(&name).map(|&addr| addr as *mut c_void)
+                {
                     unsafe {
-                        symbols
-                            .address
-                            .add(index)
-                            .write_volatile(function_address);
+                        symbols.address.add(index).write_volatile(function_address);
 
                         // Apply the relocation using the resolved function address
                         self.process_relocations(
-                            symbol_reloc_addr, 
-                            function_address, 
-                            symbols.address.add(index), 
-                            relocation, 
-                            symbol
+                            symbol_reloc_addr,
+                            function_address,
+                            symbols.address.add(index),
+                            relocation,
+                            symbol,
                         )?;
                     };
 
@@ -747,11 +751,11 @@ impl<'a> CoffRelocation<'a> {
                 } else {
                     // Apply the relocation but without a resolved function address (null pointer)
                     self.process_relocations(
-                        symbol_reloc_addr, 
-                        null_mut(), 
-                        null_mut(), 
-                        relocation, 
-                        symbol
+                        symbol_reloc_addr,
+                        null_mut(),
+                        null_mut(),
+                        relocation,
+                        symbol,
                     )?;
                 }
             }
@@ -771,15 +775,15 @@ impl<'a> CoffRelocation<'a> {
     ///
     /// Fails if the relocation kind is not supported for the active architecture.
     fn process_relocations(
-        &self, 
-        reloc_addr: *mut c_void, 
-        function_address: *mut c_void, 
-        symbols: *mut *mut c_void, 
-        relocation: &IMAGE_RELOCATION, 
-        symbol: &IMAGE_SYMBOL
+        &self,
+        reloc_addr: *mut c_void,
+        function_address: *mut c_void,
+        symbols: *mut *mut c_void,
+        relocation: &IMAGE_RELOCATION,
+        symbol: &IMAGE_SYMBOL,
     ) -> Result<()> {
         debug!(
-            "Processing relocation: Type = {}, Symbol Type = {}, StorageClass = {}, Section Number: {}", 
+            "Processing relocation: Type = {}, Symbol Type = {}, StorageClass = {}, Section Number: {}",
             relocation.Type, symbol.Type, symbol.StorageClass, symbol.SectionNumber
         );
 
@@ -788,7 +792,9 @@ impl<'a> CoffRelocation<'a> {
                 match self.coff.arch {
                     CoffMachine::X64 => {
                         let r = relocation.Type as u32;
-                        if matches!(r, IMAGE_REL_AMD64_REL32..=IMAGE_REL_AMD64_REL32_5) && !function_address.is_null() {
+                        if matches!(r, IMAGE_REL_AMD64_REL32..=IMAGE_REL_AMD64_REL32_5)
+                            && !function_address.is_null()
+                        {
                             let relative_address = (symbols as usize)
                                 .wrapping_sub(reloc_addr as usize)
                                 .wrapping_sub(size_of::<u32>())
@@ -799,15 +805,19 @@ impl<'a> CoffRelocation<'a> {
                         }
                     }
                     CoffMachine::X32 => {
-                        if relocation.Type as u32 == IMAGE_REL_I386_DIR32 && !function_address.is_null() {
+                        if relocation.Type as u32 == IMAGE_REL_I386_DIR32
+                            && !function_address.is_null()
+                        {
                             write_unaligned(reloc_addr as *mut u32, symbols as u32);
-                            return Ok(())
+                            return Ok(());
                         }
                     }
                 }
             }
 
-            let section_idx = symbol.SectionNumber.checked_sub(1)
+            let section_idx = symbol
+                .SectionNumber
+                .checked_sub(1)
                 .and_then(|idx| usize::try_from(idx).ok())
                 .filter(|&idx| idx < self.section_map.len())
                 .ok_or(CoffeeLdrError::InvalidRelocationType(relocation.Type))?;
@@ -816,61 +826,58 @@ impl<'a> CoffRelocation<'a> {
             // Target address includes symbol offset within section
             let target_addr = (section_addr as usize).wrapping_add(symbol.Value as usize);
             match self.coff.arch {
-                CoffMachine::X64 => {
-                    match relocation.Type as u32 {
-                        IMAGE_REL_AMD64_ADDR32NB if function_address.is_null() => {
-                            write_unaligned(
-                                reloc_addr as *mut u32,
-                                read_unaligned(reloc_addr as *mut u32)
-                                    .wrapping_add(target_addr
-                                        .wrapping_sub(reloc_addr as usize)
-                                        .wrapping_sub(size_of::<u32>()) as u32
-                                ),
-                            );
-                        },
-                        IMAGE_REL_AMD64_ADDR64 if function_address.is_null() => {
-                            write_unaligned(
-                                reloc_addr as *mut u64,
-                                read_unaligned(reloc_addr as *mut u64)
-                                    .wrapping_add(target_addr as u64),
-                            );
-                        },
-                        r @ IMAGE_REL_AMD64_REL32..=IMAGE_REL_AMD64_REL32_5 => {
-                            write_unaligned(
-                                reloc_addr as *mut u32,
-                                read_unaligned(reloc_addr as *mut u32)
-                                    .wrapping_add(target_addr
-                                        .wrapping_sub(reloc_addr as usize)
-                                        .wrapping_sub(size_of::<u32>())
-                                        .wrapping_sub((r - 4) as usize) as u32
-                                    ),
-                            );
-                        },
-                        _ => return Err(CoffeeLdrError::InvalidRelocationType(relocation.Type))
-                    }
-                },
-                CoffMachine::X32 => {
-                    match relocation.Type as u32 {
-                        IMAGE_REL_I386_REL32 if function_address.is_null() => {
-                            write_unaligned(
-                                reloc_addr as *mut u32,
-                                read_unaligned(reloc_addr as *mut u32)
-                                    .wrapping_add(target_addr
+                CoffMachine::X64 => match relocation.Type as u32 {
+                    IMAGE_REL_AMD64_ADDR32NB if function_address.is_null() => {
+                        write_unaligned(
+                            reloc_addr as *mut u32,
+                            read_unaligned(reloc_addr as *mut u32).wrapping_add(
+                                target_addr
                                     .wrapping_sub(reloc_addr as usize)
-                                    .wrapping_sub(size_of::<u32>()) as u32
-                                )
-                            );
-                        },
-                        IMAGE_REL_I386_DIR32 if function_address.is_null() => {
-                            write_unaligned(
-                                reloc_addr as *mut u32,
-                                read_unaligned(reloc_addr as *mut u32)
-                                    .wrapping_add(target_addr as u32)
-                            );
-                        },
-                        _ => return Err(CoffeeLdrError::InvalidRelocationType(relocation.Type))
+                                    .wrapping_sub(size_of::<u32>())
+                                    as u32,
+                            ),
+                        );
                     }
-                }
+                    IMAGE_REL_AMD64_ADDR64 if function_address.is_null() => {
+                        write_unaligned(
+                            reloc_addr as *mut u64,
+                            read_unaligned(reloc_addr as *mut u64).wrapping_add(target_addr as u64),
+                        );
+                    }
+                    r @ IMAGE_REL_AMD64_REL32..=IMAGE_REL_AMD64_REL32_5 => {
+                        write_unaligned(
+                            reloc_addr as *mut u32,
+                            read_unaligned(reloc_addr as *mut u32).wrapping_add(
+                                target_addr
+                                    .wrapping_sub(reloc_addr as usize)
+                                    .wrapping_sub(size_of::<u32>())
+                                    .wrapping_sub((r - 4) as usize)
+                                    as u32,
+                            ),
+                        );
+                    }
+                    _ => return Err(CoffeeLdrError::InvalidRelocationType(relocation.Type)),
+                },
+                CoffMachine::X32 => match relocation.Type as u32 {
+                    IMAGE_REL_I386_REL32 if function_address.is_null() => {
+                        write_unaligned(
+                            reloc_addr as *mut u32,
+                            read_unaligned(reloc_addr as *mut u32).wrapping_add(
+                                target_addr
+                                    .wrapping_sub(reloc_addr as usize)
+                                    .wrapping_sub(size_of::<u32>())
+                                    as u32,
+                            ),
+                        );
+                    }
+                    IMAGE_REL_I386_DIR32 if function_address.is_null() => {
+                        write_unaligned(
+                            reloc_addr as *mut u32,
+                            read_unaligned(reloc_addr as *mut u32).wrapping_add(target_addr as u32),
+                        );
+                    }
+                    _ => return Err(CoffeeLdrError::InvalidRelocationType(relocation.Type)),
+                },
             }
         }
 
@@ -879,8 +886,7 @@ impl<'a> CoffRelocation<'a> {
 }
 
 fn read_file(name: &str) -> Result<Vec<u8>> {
-    let file_name = CString::new(name)
-        .map_err(|_| CoffeeLdrError::Msg(s!("invalid cstring")))?;
+    let file_name = CString::new(name).map_err(|_| CoffeeLdrError::Msg(s!("invalid cstring")))?;
     let h_file = unsafe {
         CreateFileA(
             file_name.as_ptr().cast(),
@@ -919,10 +925,10 @@ fn read_file(name: &str) -> Result<Vec<u8>> {
 
 #[inline]
 fn NtFreeVirtualMemory(
-    process_handle: *mut c_void, 
-    base_address: *mut *mut c_void, 
-    region_size: *mut usize, 
-    free_type: u32
+    process_handle: *mut c_void,
+    base_address: *mut *mut c_void,
+    region_size: *mut usize,
+    free_type: u32,
 ) {
     dinvoke!(
         get_ntdll_address(),
@@ -942,9 +948,9 @@ fn NtFreeVirtualMemory(
 
 #[inline]
 fn LoadLibraryExA(
-    lp_lib_file_name: *const u8, 
-    h_file: *mut c_void, 
-    dw_flags: u32
+    lp_lib_file_name: *const u8,
+    h_file: *mut c_void,
+    dw_flags: u32,
 ) -> Option<*mut c_void> {
     let kernel32 = get_module_address(murmur3!("KERNEL32.DLL"), Some(dinvk::hash::murmur3));
     dinvoke!(
@@ -963,8 +969,8 @@ fn LoadLibraryExA(
 
 #[cfg(test)]
 mod tests {
+    use crate::{error::Result, *};
     use alloc::string::String;
-    use crate::{*, error::Result};
 
     #[test]
     fn test_whoami() -> Result<()> {
@@ -990,9 +996,7 @@ mod tests {
         let output = String::from_utf8_lossy(&output_bytes);
 
         assert!(
-            output.contains("\\")
-                || output.contains("User")
-                || output.contains("Account"),
+            output.contains("\\") || output.contains("User") || output.contains("Account"),
             "whoami output (with stomping) looks invalid: {output}"
         );
 
@@ -1028,9 +1032,7 @@ mod tests {
         let output = String::from_utf8_lossy(&output_bytes);
 
         assert!(
-            output.contains("\\")
-                || output.contains("User")
-                || output.contains("Account"),
+            output.contains("\\") || output.contains("User") || output.contains("Account"),
             "whoami buffer-loaded output does not look valid: {output}"
         );
 

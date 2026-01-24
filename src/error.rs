@@ -57,7 +57,10 @@ pub enum CoffeeLdrError {
 
     /// Architecture mismatch between file and host.
     #[error("arch mismatch: expected {expected}, actual {actual}")]
-    ArchitectureMismatch { expected: &'static str, actual: &'static str },
+    ArchitectureMismatch {
+        expected: &'static str,
+        actual: &'static str,
+    },
 
     /// File contains more symbols than supported.
     #[error("too many symbols (max {0})")]
