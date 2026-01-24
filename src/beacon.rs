@@ -829,7 +829,7 @@ fn beacon_inject_temporary_process(
             h_process,
             null_mut(),
             0,
-            Some(core::mem::transmute(entry_point)),
+            Some(core::mem::transmute::<*mut c_void, unsafe extern "system" fn(*mut c_void) -> u32>(entry_point)),
             null_mut(),
             0,
             &mut thread_id,

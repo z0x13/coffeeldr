@@ -193,7 +193,7 @@ impl<'a> CoffeeLdr<'a> {
                 let section_addr = self.section_map[section_idx].base;
                 let entrypoint = unsafe { section_addr.offset(symbol.Value as isize) };
                 let coff_main: CoffMain = unsafe { transmute(entrypoint) };
-                coff_main(args.unwrap_or(null_mut()), argc.unwrap_or(0));
+                coff_main(args.unwrap_or_default(), argc.unwrap_or_default());
                 break;
             }
         }
@@ -398,7 +398,7 @@ impl<'a> CoffMemory<'a> {
 const MAX_SYMBOLS: usize = 600;
 
 /// Represents a mapping of external symbols (functions) to their memory addresses.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct CoffSymbol {
     /// A pointer to an array of pointers, each pointing to an external function.
     address: *mut *mut c_void,
@@ -573,11 +573,6 @@ impl CoffSymbol {
     }
 }
 
-impl Default for CoffSymbol {
-    fn default() -> Self {
-        Self { address: null_mut() }
-    }
-}
 
 /// Describes a mapped section of memory, including base, size and attributes.
 #[derive(Debug, Clone)]
