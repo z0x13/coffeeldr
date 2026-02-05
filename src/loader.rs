@@ -15,19 +15,29 @@ use core::{
 };
 
 use const_hashes::murmur3;
-use dinvk::module::{get_module_address, get_ntdll_address, get_proc_address};
-use dinvk::winapis::{
-    LoadLibraryA, NT_SUCCESS, NtAllocateVirtualMemory, NtCurrentProcess, NtProtectVirtualMemory,
-};
-use dinvk::{dinvoke, helper::PE, types::NTSTATUS};
 use log::{debug, info, warn};
 use obfstr::{obfstr as obf, obfstring as s};
-use windows_sys::Win32::{
-    Foundation::*,
-    Storage::FileSystem::*,
+use windows::Win32::{
+    Foundation::{GetLastError, INVALID_HANDLE_VALUE, CloseHandle},
+    Storage::FileSystem::{
+        CreateFileA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_GENERIC_READ, GetFileSize,
+        INVALID_FILE_SIZE, OPEN_EXISTING, ReadFile,
+    },
     System::{
-        Diagnostics::Debug::*, LibraryLoader::DONT_RESOLVE_DLL_REFERENCES, Memory::*,
-        SystemServices::*,
+        Diagnostics::Debug::{
+            IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_NOT_CACHED, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE,
+        },
+        LibraryLoader::{LoadLibraryExA, DONT_RESOLVE_DLL_REFERENCES},
+        Memory::{
+            MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_EXECUTE, PAGE_EXECUTE_READ,
+            PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_NOACCESS, PAGE_NOCACHE,
+            PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, VIRTUAL_ALLOCATION_TYPE, VirtualAlloc,
+            VirtualFree, VirtualProtect,
+        },
+        SystemServices::{
+            IMAGE_REL_AMD64_REL32, IMAGE_REL_AMD64_REL32_5, IMAGE_REL_I386_DIR32,
+            IMAGE_SYM_CLASS_EXTERNAL, MEM_TOP_DOWN,
+        },
     },
 };
 
@@ -237,25 +247,14 @@ impl Drop for CoffeeLdr<'_> {
             return;
         }
 
-        let mut size = 0;
         for section in self.section_map.iter_mut() {
             if !section.base.is_null() {
-                NtFreeVirtualMemory(
-                    NtCurrentProcess(),
-                    &mut section.base,
-                    &mut size,
-                    MEM_RELEASE,
-                );
+                let _ = unsafe { VirtualFree(section.base, 0, MEM_RELEASE) };
             }
         }
 
         if !self.symbols.address.is_null() {
-            NtFreeVirtualMemory(
-                NtCurrentProcess(),
-                unsafe { &mut *self.symbols.address },
-                &mut size,
-                MEM_RELEASE,
-            );
+            let _ = unsafe { VirtualFree(*self.symbols.address, 0, MEM_RELEASE) };
         }
     }
 }
@@ -294,20 +293,19 @@ impl<'a> CoffMemory<'a> {
     ///
     /// Fails if the OS cannot allocate the region.
     fn alloc_bof_memory(&self) -> Result<(Vec<SectionMap>, Option<*mut c_void>)> {
-        let mut size = self.coff.size();
-        let mut addr = null_mut();
-        let status = NtAllocateVirtualMemory(
-            NtCurrentProcess(),
-            &mut addr,
-            0,
-            &mut size,
-            MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN,
-            PAGE_READWRITE,
-        );
+        let size = self.coff.size();
+        let addr = unsafe {
+            VirtualAlloc(
+                None,
+                size,
+                MEM_COMMIT | MEM_RESERVE | VIRTUAL_ALLOCATION_TYPE(MEM_TOP_DOWN),
+                PAGE_READWRITE,
+            )
+        };
 
-        if status != STATUS_SUCCESS {
+        if addr.is_null() {
             return Err(CoffeeLdrError::MemoryAllocationError(unsafe {
-                GetLastError()
+                GetLastError().0
             }));
         }
 
@@ -325,7 +323,7 @@ impl<'a> CoffMemory<'a> {
     ///
     /// Fails if the section cannot be located, resized or overwritten.
     fn alloc_with_stomping(&self) -> Result<(Vec<SectionMap>, Option<*mut c_void>)> {
-        let (mut text_address, mut size) = self
+        let (text_address, size) = self
             .get_text_module()
             .ok_or(CoffeeLdrError::StompingTextSectionNotFound)?;
 
@@ -335,16 +333,10 @@ impl<'a> CoffMemory<'a> {
             return Err(CoffeeLdrError::StompingSizeOverflow);
         }
 
-        let mut old = 0;
-        if !NT_SUCCESS(NtProtectVirtualMemory(
-            NtCurrentProcess(),
-            &mut text_address,
-            &mut size,
-            PAGE_READWRITE,
-            &mut old,
-        )) {
+        let mut old = PAGE_READWRITE;
+        if unsafe { VirtualProtect(text_address, size, PAGE_READWRITE, &mut old) }.is_err() {
             return Err(CoffeeLdrError::MemoryProtectionError(unsafe {
-                GetLastError()
+                GetLastError().0
             }));
         }
 
@@ -360,25 +352,20 @@ impl<'a> CoffMemory<'a> {
 
     /// Finds the `.text` section of the target module, if present.
     fn get_text_module(&self) -> Option<(*mut c_void, usize)> {
-        // Invoking LoadLibraryExA dynamically
+        use windows::core::PCSTR;
+        use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+
         let target = format!("{}\0", self.module);
-        let h_module = {
-            let handle = get_module_address(self.module, None);
-            if handle.is_null() {
-                LoadLibraryExA(target.as_ptr(), null_mut(), DONT_RESOLVE_DLL_REFERENCES)?
-            } else {
-                handle
-            }
+        let h_module = unsafe {
+            GetModuleHandleA(PCSTR(target.as_ptr()))
+                .ok()
+                .or_else(|| LoadLibraryExA(PCSTR(target.as_ptr()), None, DONT_RESOLVE_DLL_REFERENCES).ok())?
         };
 
-        if h_module.is_null() {
-            return None;
-        }
-
         // Retrieving `.text` from the target module
-        let pe = PE::parse(h_module);
-        let section = pe.section_by_name(obf!(".text"))?;
-        let ptr = (h_module as usize + section.VirtualAddress as usize) as *mut c_void;
+        let pe = parse_pe(h_module.0 as *mut c_void);
+        let section = find_section_by_name(&pe, obf!(".text"))?;
+        let ptr = (h_module.0 as usize + section.VirtualAddress as usize) as *mut c_void;
         let size = section.SizeOfRawData as usize;
 
         Some((ptr, size))
@@ -414,20 +401,19 @@ impl CoffSymbol {
             let addr = base_addr.ok_or(CoffeeLdrError::MissingStompingBaseAddress)?;
             addr as *mut *mut c_void
         } else {
-            let mut size = MAX_SYMBOLS * size_of::<*mut c_void>();
-            let mut addr = null_mut();
-            let status = NtAllocateVirtualMemory(
-                NtCurrentProcess(),
-                &mut addr,
-                0,
-                &mut size,
-                MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN,
-                PAGE_READWRITE,
-            );
+            let size = MAX_SYMBOLS * size_of::<*mut c_void>();
+            let addr = unsafe {
+                VirtualAlloc(
+                    None,
+                    size,
+                    MEM_COMMIT | MEM_RESERVE | VIRTUAL_ALLOCATION_TYPE(MEM_TOP_DOWN),
+                    PAGE_READWRITE,
+                )
+            };
 
-            if addr.is_null() || status != STATUS_SUCCESS {
+            if addr.is_null() {
                 return Err(CoffeeLdrError::MemoryAllocationError(unsafe {
-                    GetLastError()
+                    GetLastError().0
                 }));
             }
 
@@ -540,30 +526,27 @@ impl CoffSymbol {
 
     /// Resolves a DLL export by module name and function name.
     fn resolve_dll_function(dll: &str, mut function: &str, coff: &Coff) -> Result<usize> {
+        use windows::core::PCSTR;
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA};
+
         if let CoffMachine::X32 = coff.arch {
             function = function.split('@').next().unwrap_or(function);
         }
 
         debug!("Resolving Module {} and Function {}", dll, function);
-        let module = {
-            let mut handle = get_module_address(dll.to_string(), None);
-            if handle.is_null() {
-                handle = LoadLibraryA(dll);
-                if handle.is_null() {
-                    return Err(CoffeeLdrError::ModuleNotFound(dll.to_string()));
-                }
+        let dll_cstr = format!("{dll}\0");
+        let func_cstr = format!("{function}\0");
 
-                handle
-            } else {
-                handle
-            }
+        let module = unsafe {
+            GetModuleHandleA(PCSTR(dll_cstr.as_ptr()))
+                .or_else(|_| LoadLibraryA(PCSTR(dll_cstr.as_ptr())))
+                .map_err(|_| CoffeeLdrError::ModuleNotFound(dll.to_string()))?
         };
 
-        let addr = get_proc_address(module, function, None);
-        if addr.is_null() {
-            Err(CoffeeLdrError::FunctionNotFound(function.to_string()))
-        } else {
-            Ok(addr as usize)
+        let addr = unsafe { GetProcAddress(module, PCSTR(func_cstr.as_ptr())) };
+        match addr {
+            Some(f) => Ok(f as usize),
+            None => Err(CoffeeLdrError::FunctionNotFound(function.to_string())),
         }
     }
 }
@@ -638,42 +621,36 @@ impl SectionMap {
         );
 
         let bitmask = self.characteristics
-            & (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE);
+            & (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE).0;
         let mut protection = if bitmask == 0 {
             PAGE_NOACCESS
-        } else if bitmask == IMAGE_SCN_MEM_EXECUTE {
+        } else if bitmask == IMAGE_SCN_MEM_EXECUTE.0 {
             PAGE_EXECUTE
-        } else if bitmask == IMAGE_SCN_MEM_READ {
+        } else if bitmask == IMAGE_SCN_MEM_READ.0 {
             PAGE_READONLY
-        } else if bitmask == (IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE) {
+        } else if bitmask == (IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE).0 {
             PAGE_EXECUTE_READ
-        } else if bitmask == IMAGE_SCN_MEM_WRITE {
+        } else if bitmask == IMAGE_SCN_MEM_WRITE.0 {
             PAGE_WRITECOPY
-        } else if bitmask == (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_WRITE) {
+        } else if bitmask == (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_WRITE).0 {
             PAGE_EXECUTE_WRITECOPY
-        } else if bitmask == (IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE) {
+        } else if bitmask == (IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE).0 {
             PAGE_READWRITE
-        } else if bitmask == (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE) {
+        } else if bitmask == (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE).0 {
             PAGE_EXECUTE_READWRITE
         } else {
             warn!("Unknown protection, using PAGE_EXECUTE_READWRITE");
             PAGE_EXECUTE_READWRITE
         };
 
-        if (protection & IMAGE_SCN_MEM_NOT_CACHED) == IMAGE_SCN_MEM_NOT_CACHED {
+        if (self.characteristics & IMAGE_SCN_MEM_NOT_CACHED.0) == IMAGE_SCN_MEM_NOT_CACHED.0 {
             protection |= PAGE_NOCACHE;
         }
 
-        let mut old = 0;
-        if !NT_SUCCESS(NtProtectVirtualMemory(
-            NtCurrentProcess(),
-            &mut self.base,
-            &mut self.size,
-            protection,
-            &mut old,
-        )) {
+        let mut old = PAGE_READWRITE;
+        if unsafe { VirtualProtect(self.base, self.size, protection, &mut old) }.is_err() {
             return Err(CoffeeLdrError::MemoryProtectionError(unsafe {
-                GetLastError()
+                GetLastError().0
             }));
         }
 
@@ -886,85 +863,106 @@ impl<'a> CoffRelocation<'a> {
 }
 
 fn read_file(name: &str) -> Result<Vec<u8>> {
+    use windows::core::PCSTR;
+
     let file_name = CString::new(name).map_err(|_| CoffeeLdrError::Msg(s!("invalid cstring")))?;
     let h_file = unsafe {
         CreateFileA(
-            file_name.as_ptr().cast(),
-            GENERIC_READ,
+            PCSTR::from_raw(file_name.as_ptr().cast()),
+            FILE_GENERIC_READ.0,
             FILE_SHARE_READ,
-            null_mut(),
+            None,
             OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL,
-            null_mut(),
+            None,
         )
+        .map_err(|_| CoffeeLdrError::Msg(s!("failed to open file")))?
     };
 
     if h_file == INVALID_HANDLE_VALUE {
         return Err(CoffeeLdrError::Msg(s!("failed to open file")));
     }
 
-    let size = unsafe { GetFileSize(h_file, null_mut()) };
+    let size = unsafe { GetFileSize(h_file, None) };
     if size == INVALID_FILE_SIZE {
+        unsafe { let _ = CloseHandle(h_file); }
         return Err(CoffeeLdrError::Msg(s!("invalid file size")));
     }
 
     let mut out = vec![0u8; size as usize];
-    let mut bytes = 0;
+    let mut bytes_read = 0u32;
     unsafe {
-        ReadFile(
-            h_file,
-            out.as_mut_ptr(),
-            out.len() as u32,
-            &mut bytes,
-            null_mut(),
-        );
+        ReadFile(h_file, Some(&mut out), Some(&mut bytes_read), None)
+            .map_err(|_| CoffeeLdrError::Msg(s!("failed to read file")))?;
+        let _ = CloseHandle(h_file);
     }
 
     Ok(out)
 }
 
-#[inline]
-fn NtFreeVirtualMemory(
-    process_handle: *mut c_void,
-    base_address: *mut *mut c_void,
-    region_size: *mut usize,
-    free_type: u32,
-) {
-    dinvoke!(
-        get_ntdll_address(),
-        s!("NtFreeVirtualMemory"),
-        unsafe extern "system" fn(
-            process_handle: *mut c_void,
-            base_address: *mut *mut c_void,
-            region_size: *mut usize,
-            free_type: u32,
-        ) -> NTSTATUS,
-        process_handle,
-        base_address,
-        region_size,
-        free_type
-    );
+#[repr(C)]
+struct ImageDosHeader {
+    e_magic: u16,
+    _pad: [u8; 58],
+    e_lfanew: i32,
 }
 
-#[inline]
-fn LoadLibraryExA(
-    lp_lib_file_name: *const u8,
-    h_file: *mut c_void,
-    dw_flags: u32,
-) -> Option<*mut c_void> {
-    let kernel32 = get_module_address(murmur3!("KERNEL32.DLL"), Some(dinvk::hash::murmur3));
-    dinvoke!(
-        kernel32,
-        s!("LoadLibraryExA"),
-        unsafe extern "system" fn(
-            lp_lib_file_name: *const u8,
-            h_file: *mut c_void,
-            dw_flags: u32,
-        ) -> *mut c_void,
-        lp_lib_file_name,
-        h_file,
-        dw_flags
-    )
+#[repr(C)]
+struct ImageFileHeader {
+    machine: u16,
+    number_of_sections: u16,
+    _pad: [u8; 12],
+    size_of_optional_header: u16,
+    _characteristics: u16,
+}
+
+#[repr(C)]
+struct ImageNtHeaders {
+    signature: u32,
+    file_header: ImageFileHeader,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ImageSectionHeader {
+    name: [u8; 8],
+    pub VirtualSize: u32,
+    pub VirtualAddress: u32,
+    pub SizeOfRawData: u32,
+    _rest: [u8; 24],
+}
+
+struct ParsedPe {
+    _base: *mut c_void,
+    sections: &'static [ImageSectionHeader],
+}
+
+fn parse_pe(base: *mut c_void) -> ParsedPe {
+    unsafe {
+        let dos = base as *const ImageDosHeader;
+        let nt = (base as usize + (*dos).e_lfanew as usize) as *const ImageNtHeaders;
+        let section_start = (nt as usize
+            + core::mem::size_of::<ImageNtHeaders>()
+            + (*nt).file_header.size_of_optional_header as usize)
+            as *const ImageSectionHeader;
+        let sections = core::slice::from_raw_parts(
+            section_start,
+            (*nt).file_header.number_of_sections as usize,
+        );
+        ParsedPe { _base: base, sections }
+    }
+}
+
+fn find_section_by_name(pe: &ParsedPe, name: &str) -> Option<ImageSectionHeader> {
+    for section in pe.sections {
+        let section_name = core::str::from_utf8(&section.name)
+            .ok()?
+            .trim_end_matches('\0');
+        if section_name == name {
+            return Some(*section);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
