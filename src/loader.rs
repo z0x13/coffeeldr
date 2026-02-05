@@ -18,16 +18,17 @@ use const_hashes::murmur3;
 use log::{debug, info, warn};
 use obfstr::{obfstr as obf, obfstring as s};
 use windows::Win32::{
-    Foundation::{GetLastError, INVALID_HANDLE_VALUE, CloseHandle},
+    Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE},
     Storage::FileSystem::{
-        CreateFileA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_GENERIC_READ, GetFileSize,
+        CreateFileA, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_SHARE_READ, GetFileSize,
         INVALID_FILE_SIZE, OPEN_EXISTING, ReadFile,
     },
     System::{
         Diagnostics::Debug::{
-            IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_NOT_CACHED, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE,
+            IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_NOT_CACHED, IMAGE_SCN_MEM_READ,
+            IMAGE_SCN_MEM_WRITE,
         },
-        LibraryLoader::{LoadLibraryExA, DONT_RESOLVE_DLL_REFERENCES},
+        LibraryLoader::{DONT_RESOLVE_DLL_REFERENCES, LoadLibraryExA},
         Memory::{
             MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_EXECUTE, PAGE_EXECUTE_READ,
             PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_NOACCESS, PAGE_NOCACHE,
@@ -352,14 +353,14 @@ impl<'a> CoffMemory<'a> {
 
     /// Finds the `.text` section of the target module, if present.
     fn get_text_module(&self) -> Option<(*mut c_void, usize)> {
-        use windows::core::PCSTR;
         use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+        use windows::core::PCSTR;
 
         let target = format!("{}\0", self.module);
         let h_module = unsafe {
-            GetModuleHandleA(PCSTR(target.as_ptr()))
-                .ok()
-                .or_else(|| LoadLibraryExA(PCSTR(target.as_ptr()), None, DONT_RESOLVE_DLL_REFERENCES).ok())?
+            GetModuleHandleA(PCSTR(target.as_ptr())).ok().or_else(|| {
+                LoadLibraryExA(PCSTR(target.as_ptr()), None, DONT_RESOLVE_DLL_REFERENCES).ok()
+            })?
         };
 
         // Retrieving `.text` from the target module
@@ -526,8 +527,10 @@ impl CoffSymbol {
 
     /// Resolves a DLL export by module name and function name.
     fn resolve_dll_function(dll: &str, mut function: &str, coff: &Coff) -> Result<usize> {
+        use windows::Win32::System::LibraryLoader::{
+            GetModuleHandleA, GetProcAddress, LoadLibraryA,
+        };
         use windows::core::PCSTR;
-        use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA};
 
         if let CoffMachine::X32 = coff.arch {
             function = function.split('@').next().unwrap_or(function);
@@ -885,7 +888,9 @@ fn read_file(name: &str) -> Result<Vec<u8>> {
 
     let size = unsafe { GetFileSize(h_file, None) };
     if size == INVALID_FILE_SIZE {
-        unsafe { let _ = CloseHandle(h_file); }
+        unsafe {
+            let _ = CloseHandle(h_file);
+        }
         return Err(CoffeeLdrError::Msg(s!("invalid file size")));
     }
 
@@ -949,7 +954,10 @@ fn parse_pe(base: *mut c_void) -> ParsedPe {
             section_start,
             (*nt).file_header.number_of_sections as usize,
         );
-        ParsedPe { _base: base, sections }
+        ParsedPe {
+            _base: base,
+            sections,
+        }
     }
 }
 

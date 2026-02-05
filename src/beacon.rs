@@ -14,9 +14,7 @@ use core::{
 use spin::Mutex;
 use windows::Win32::{
     Foundation::{CloseHandle, DuplicateHandle, HANDLE},
-    Security::{
-        GetTokenInformation, RevertToSelf, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
-    },
+    Security::{GetTokenInformation, RevertToSelf, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
     System::{
         Diagnostics::Debug::{CONTEXT, GetThreadContext, SetThreadContext},
         Memory::{
@@ -30,7 +28,6 @@ use windows::Win32::{
         },
     },
 };
-
 
 use crate::error::{CoffeeLdrError, Result};
 use const_encrypt::obf;
@@ -1019,9 +1016,7 @@ fn beacon_virtual_alloc(
     alloc_type: u32,
     protect: u32,
 ) -> *mut c_void {
-    use windows::Win32::System::Memory::{
-        PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE,
-    };
+    use windows::Win32::System::Memory::{PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE};
     unsafe {
         VirtualAlloc(
             Some(address),
@@ -1041,9 +1036,7 @@ fn beacon_virtual_alloc_ex(
     alloc_type: u32,
     protect: u32,
 ) -> *mut c_void {
-    use windows::Win32::System::Memory::{
-        PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE,
-    };
+    use windows::Win32::System::Memory::{PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE};
     unsafe {
         VirtualAllocEx(
             process,
@@ -1086,8 +1079,13 @@ fn beacon_virtual_protect_ex(
     use windows::Win32::System::Memory::PAGE_PROTECTION_FLAGS;
     unsafe {
         let mut old = PAGE_PROTECTION_FLAGS(0);
-        let result =
-            VirtualProtectEx(process, address, size, PAGE_PROTECTION_FLAGS(new_protect), &mut old);
+        let result = VirtualProtectEx(
+            process,
+            address,
+            size,
+            PAGE_PROTECTION_FLAGS(new_protect),
+            &mut old,
+        );
         if !old_protect.is_null() {
             *old_protect = old.0;
         }
@@ -1121,13 +1119,25 @@ fn beacon_virtual_query(
 /// Gets the context of the specified thread.
 /// Proxy to kernel32!GetThreadContext.
 fn beacon_get_thread_context(thread: HANDLE, context: *mut CONTEXT) -> i32 {
-    unsafe { if GetThreadContext(thread, context).is_ok() { 1 } else { 0 } }
+    unsafe {
+        if GetThreadContext(thread, context).is_ok() {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// Sets the context of the specified thread.
 /// Proxy to kernel32!SetThreadContext.
 fn beacon_set_thread_context(thread: HANDLE, context: *const CONTEXT) -> i32 {
-    unsafe { if SetThreadContext(thread, context).is_ok() { 1 } else { 0 } }
+    unsafe {
+        if SetThreadContext(thread, context).is_ok() {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// Resumes the specified thread.
@@ -1141,8 +1151,12 @@ fn beacon_resume_thread(thread: HANDLE) -> u32 {
 fn beacon_open_process(desired_access: u32, inherit_handle: i32, process_id: u32) -> HANDLE {
     use windows::Win32::System::Threading::PROCESS_ACCESS_RIGHTS;
     unsafe {
-        OpenProcess(PROCESS_ACCESS_RIGHTS(desired_access), inherit_handle != 0, process_id)
-            .unwrap_or_default()
+        OpenProcess(
+            PROCESS_ACCESS_RIGHTS(desired_access),
+            inherit_handle != 0,
+            process_id,
+        )
+        .unwrap_or_default()
     }
 }
 
@@ -1151,8 +1165,12 @@ fn beacon_open_process(desired_access: u32, inherit_handle: i32, process_id: u32
 fn beacon_open_thread(desired_access: u32, inherit_handle: i32, thread_id: u32) -> HANDLE {
     use windows::Win32::System::Threading::THREAD_ACCESS_RIGHTS;
     unsafe {
-        OpenThread(THREAD_ACCESS_RIGHTS(desired_access), inherit_handle != 0, thread_id)
-            .unwrap_or_default()
+        OpenThread(
+            THREAD_ACCESS_RIGHTS(desired_access),
+            inherit_handle != 0,
+            thread_id,
+        )
+        .unwrap_or_default()
     }
 }
 
@@ -1213,7 +1231,11 @@ fn beacon_read_process_memory(
     bytes_read: *mut usize,
 ) -> i32 {
     unsafe {
-        let opt_bytes_read = if bytes_read.is_null() { None } else { Some(bytes_read) };
+        let opt_bytes_read = if bytes_read.is_null() {
+            None
+        } else {
+            Some(bytes_read)
+        };
         if dinvoke::kernel32::ReadProcessMemory(process, base_address, buffer, size, opt_bytes_read)
             .is_ok()
         {
@@ -1234,7 +1256,11 @@ fn beacon_write_process_memory(
     bytes_written: *mut usize,
 ) -> i32 {
     unsafe {
-        let opt_bytes_written = if bytes_written.is_null() { None } else { Some(bytes_written) };
+        let opt_bytes_written = if bytes_written.is_null() {
+            None
+        } else {
+            Some(bytes_written)
+        };
         if dinvoke::kernel32::WriteProcessMemory(
             process,
             base_address,
