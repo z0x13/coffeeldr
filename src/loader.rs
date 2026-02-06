@@ -33,7 +33,7 @@ use windows::Win32::{
             MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_EXECUTE, PAGE_EXECUTE_READ,
             PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_NOACCESS, PAGE_NOCACHE,
             PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, VIRTUAL_ALLOCATION_TYPE, VirtualAlloc,
-            VirtualFree, VirtualProtect,
+            VirtualFree,
         },
         SystemServices::{
             IMAGE_REL_AMD64_REL32, IMAGE_REL_AMD64_REL32_5, IMAGE_REL_I386_DIR32,
@@ -335,7 +335,11 @@ impl<'a> CoffMemory<'a> {
         }
 
         let mut old = PAGE_READWRITE;
-        if unsafe { VirtualProtect(text_address, size, PAGE_READWRITE, &mut old) }.is_err() {
+        if unsafe {
+            dinvoke::kernel32::VirtualProtect(text_address, size, PAGE_READWRITE, &mut old)
+        }
+        .is_err()
+        {
             return Err(CoffeeLdrError::MemoryProtectionError(unsafe {
                 GetLastError().0
             }));
@@ -651,7 +655,9 @@ impl SectionMap {
         }
 
         let mut old = PAGE_READWRITE;
-        if unsafe { VirtualProtect(self.base, self.size, protection, &mut old) }.is_err() {
+        if unsafe { dinvoke::kernel32::VirtualProtect(self.base, self.size, protection, &mut old) }
+            .is_err()
+        {
             return Err(CoffeeLdrError::MemoryProtectionError(unsafe {
                 GetLastError().0
             }));
