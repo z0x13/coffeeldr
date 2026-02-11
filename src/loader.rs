@@ -368,7 +368,7 @@ impl<'a> CoffMemory<'a> {
         };
 
         // Retrieving `.text` from the target module
-        let pe = parse_pe(h_module.0 as *mut c_void);
+        let pe = parse_pe(h_module.0);
         let section = find_section_by_name(&pe, obf!(".text"))?;
         let ptr = (h_module.0 as usize + section.VirtualAddress as usize) as *mut c_void;
         let size = section.SizeOfRawData as usize;
