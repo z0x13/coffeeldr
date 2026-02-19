@@ -261,7 +261,7 @@ impl<'a> Coff<'a> {
 }
 
 /// Represents the architecture of the COFF file.
-#[derive(Debug, PartialEq, Hash, Clone, Copy, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Hash, Clone, Copy, Eq, PartialOrd, Ord)]
 pub enum CoffMachine {
     /// 64-bit architecture.
     X64,
@@ -329,7 +329,7 @@ impl<'a> From<&'a [u8]> for CoffSource<'a> {
 }
 
 /// Represents the file header of a COFF (Common Object File Format) file.
-#[derive(Default, Debug, Clone, Copy)]
+#[derive(Default, Clone, Copy)]
 #[repr(C)]
 pub struct IMAGE_FILE_HEADER {
     /// The target machine architecture (e.g., x64, x32).

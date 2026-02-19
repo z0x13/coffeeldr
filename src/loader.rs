@@ -381,7 +381,7 @@ impl<'a> CoffMemory<'a> {
 const MAX_SYMBOLS: usize = 600;
 
 /// Represents a mapping of external symbols (functions) to their memory addresses.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Default)]
 struct CoffSymbol {
     /// A pointer to an array of pointers, each pointing to an external function.
     address: *mut *mut c_void,
@@ -562,7 +562,7 @@ impl CoffSymbol {
 }
 
 /// Describes a mapped section of memory, including base, size and attributes.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct SectionMap {
     /// Base address of the section.
     base: *mut c_void,

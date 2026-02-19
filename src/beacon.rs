@@ -78,7 +78,7 @@ static BEACON_DATA_STORE: Mutex<[DataStoreObject; DATA_STORE_MAX_ENTRIES]> =
 
 /// A buffer used for managing and collecting output for the beacon.
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BeaconOutputBuffer {
     /// Internal buffer that stores the output data as a vector of `c_char`.
     pub buffer: Vec<c_char>,
@@ -135,7 +135,7 @@ impl fmt::Display for BeaconOutputBuffer {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct Data {
     /// The original buffer.
     original: *mut c_char,
@@ -151,7 +151,7 @@ struct Data {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct Format {
     /// The original buffer.
     original: *mut c_char,

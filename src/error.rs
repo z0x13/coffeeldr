@@ -4,7 +4,6 @@ use core::fmt;
 
 pub type Result<T> = core::result::Result<T, CoffeeLdrError>;
 
-#[derive(Debug)]
 pub enum CoffeeLdrError {
     Msg(String),
     Hex(hex::FromHexError),
@@ -25,6 +24,12 @@ pub enum CoffeeLdrError {
     StompingTextSectionNotFound,
     StompingSizeOverflow,
     MissingStompingBaseAddress,
+}
+
+impl fmt::Debug for CoffeeLdrError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("_")
+    }
 }
 
 impl fmt::Display for CoffeeLdrError {
@@ -67,7 +72,6 @@ impl fmt::Display for CoffeeLdrError {
 
 impl core::error::Error for CoffeeLdrError {}
 
-#[derive(Debug)]
 pub enum CoffError {
     FileReadError(String),
     InvalidCoffFile,
@@ -76,6 +80,12 @@ pub enum CoffError {
     UnsupportedArchitecture,
     InvalidSectionsOrSymbols,
     SectionLimitExceeded,
+}
+
+impl fmt::Debug for CoffError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("_")
+    }
 }
 
 impl fmt::Display for CoffError {
