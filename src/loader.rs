@@ -14,9 +14,9 @@ use core::{
     ptr::{null_mut, read_unaligned, write_unaligned},
 };
 
+use const_encrypt::obf;
 use const_hashes::murmur3;
 use log::{debug, info, warn};
-use obfstr::{obfstr as obf, obfstring as s};
 use windows::Win32::{
     Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE},
     Storage::FileSystem::{
@@ -369,7 +369,7 @@ impl<'a> CoffMemory<'a> {
 
         // Retrieving `.text` from the target module
         let pe = parse_pe(h_module.0);
-        let section = find_section_by_name(&pe, obf!(".text"))?;
+        let section = find_section_by_name(&pe, &obf!(".text").to_string())?;
         let ptr = (h_module.0 as usize + section.VirtualAddress as usize) as *mut c_void;
         let size = section.SizeOfRawData as usize;
 
@@ -461,52 +461,55 @@ impl CoffSymbol {
     ///
     /// Fails when the symbol cannot be parsed, module cannot be loaded,
     /// or the export cannot be found.
-    const FALLBACK_KERNEL32: &'static [(u32, &'static str)] = &[
-        (murmur3!("LoadLibraryA"), "kernel32"),
-        (murmur3!("LoadLibraryW"), "kernel32"),
-        (murmur3!("FreeLibrary"), "kernel32"),
-        (murmur3!("GetProcAddress"), "kernel32"),
-        (murmur3!("GetModuleHandleA"), "kernel32"),
-        (murmur3!("GetModuleHandleW"), "kernel32"),
-        (murmur3!("GetModuleFileNameA"), "kernel32"),
-        (murmur3!("GetModuleFileNameW"), "kernel32"),
-        (murmur3!("VirtualAlloc"), "kernel32"),
-        (murmur3!("VirtualFree"), "kernel32"),
-        (murmur3!("VirtualProtect"), "kernel32"),
-        (murmur3!("GetLastError"), "kernel32"),
-        (murmur3!("SetLastError"), "kernel32"),
-        (murmur3!("GetCurrentProcess"), "kernel32"),
-        (murmur3!("GetCurrentThread"), "kernel32"),
-        (murmur3!("GetCurrentProcessId"), "kernel32"),
-        (murmur3!("GetCurrentThreadId"), "kernel32"),
-        (murmur3!("CloseHandle"), "kernel32"),
-        (murmur3!("HeapAlloc"), "kernel32"),
-        (murmur3!("HeapFree"), "kernel32"),
-        (murmur3!("HeapReAlloc"), "kernel32"),
-        (murmur3!("GetProcessHeap"), "kernel32"),
-        (murmur3!("MessageBoxA"), "user32"),
-        (murmur3!("MessageBoxW"), "user32"),
+    const KERNEL32_HASHES: &[u32] = &[
+        murmur3!("LoadLibraryA"),
+        murmur3!("LoadLibraryW"),
+        murmur3!("FreeLibrary"),
+        murmur3!("GetProcAddress"),
+        murmur3!("GetModuleHandleA"),
+        murmur3!("GetModuleHandleW"),
+        murmur3!("GetModuleFileNameA"),
+        murmur3!("GetModuleFileNameW"),
+        murmur3!("VirtualAlloc"),
+        murmur3!("VirtualFree"),
+        murmur3!("VirtualProtect"),
+        murmur3!("GetLastError"),
+        murmur3!("SetLastError"),
+        murmur3!("GetCurrentProcess"),
+        murmur3!("GetCurrentThread"),
+        murmur3!("GetCurrentProcessId"),
+        murmur3!("GetCurrentThreadId"),
+        murmur3!("CloseHandle"),
+        murmur3!("HeapAlloc"),
+        murmur3!("HeapFree"),
+        murmur3!("HeapReAlloc"),
+        murmur3!("GetProcessHeap"),
     ];
 
-    fn get_fallback_dll(function: &str) -> Option<&'static str> {
+    const USER32_HASHES: &[u32] = &[murmur3!("MessageBoxA"), murmur3!("MessageBoxW")];
+
+    fn get_fallback_dll(function: &str) -> Option<String> {
         let hash = const_hashes::runtime::murmur3(function);
-        Self::FALLBACK_KERNEL32
-            .iter()
-            .find(|(h, _)| *h == hash)
-            .map(|(_, dll)| *dll)
+        if Self::KERNEL32_HASHES.contains(&hash) {
+            Some(obf!("kernel32").to_string())
+        } else if Self::USER32_HASHES.contains(&hash) {
+            Some(obf!("user32").to_string())
+        } else {
+            None
+        }
     }
 
     fn resolve_symbol_address(name: &str, coff: &Coff) -> Result<usize> {
         debug!("Attempting to resolve address for symbol: {}", name);
 
         let prefix = match coff.arch {
-            CoffMachine::X64 => "__imp_",
-            CoffMachine::X32 => "__imp__",
+            CoffMachine::X64 => obf!("__imp_").to_string(),
+            CoffMachine::X32 => obf!("__imp__").to_string(),
         };
 
-        if let Some(symbol_name) = name.strip_prefix(prefix) {
-            if symbol_name.starts_with(obf!("Beacon"))
-                || symbol_name.starts_with(obf!("toWideChar"))
+        if let Some(symbol_name) = name.strip_prefix(prefix.as_str()) {
+            if symbol_name.starts_with(&obf!("Beacon").to_string())
+                || symbol_name.starts_with(&obf!("toWideChar").to_string())
             {
                 debug!("Resolving Beacon: {}", symbol_name);
                 return get_function_internal_address(symbol_name);
@@ -518,7 +521,7 @@ impl CoffSymbol {
 
             if let Some(dll) = Self::get_fallback_dll(symbol_name) {
                 debug!("Fallback: {} -> {}", symbol_name, dll);
-                return Self::resolve_dll_function(dll, symbol_name, coff);
+                return Self::resolve_dll_function(&dll, symbol_name, coff);
             }
         }
 
@@ -874,7 +877,8 @@ impl<'a> CoffRelocation<'a> {
 fn read_file(name: &str) -> Result<Vec<u8>> {
     use windows::core::PCSTR;
 
-    let file_name = CString::new(name).map_err(|_| CoffeeLdrError::Msg(s!("invalid cstring")))?;
+    let file_name =
+        CString::new(name).map_err(|_| CoffeeLdrError::Msg(obf!("invalid cstring").to_string()))?;
     let h_file = unsafe {
         CreateFileA(
             PCSTR::from_raw(file_name.as_ptr().cast()),
@@ -885,11 +889,11 @@ fn read_file(name: &str) -> Result<Vec<u8>> {
             FILE_ATTRIBUTE_NORMAL,
             None,
         )
-        .map_err(|_| CoffeeLdrError::Msg(s!("failed to open file")))?
+        .map_err(|_| CoffeeLdrError::Msg(obf!("failed to open file").to_string()))?
     };
 
     if h_file == INVALID_HANDLE_VALUE {
-        return Err(CoffeeLdrError::Msg(s!("failed to open file")));
+        return Err(CoffeeLdrError::Msg(obf!("failed to open file").to_string()));
     }
 
     let size = unsafe { GetFileSize(h_file, None) };
@@ -897,14 +901,14 @@ fn read_file(name: &str) -> Result<Vec<u8>> {
         unsafe {
             let _ = CloseHandle(h_file);
         }
-        return Err(CoffeeLdrError::Msg(s!("invalid file size")));
+        return Err(CoffeeLdrError::Msg(obf!("invalid file size").to_string()));
     }
 
     let mut out = vec![0u8; size as usize];
     let mut bytes_read = 0u32;
     unsafe {
         ReadFile(h_file, Some(&mut out), Some(&mut bytes_read), None)
-            .map_err(|_| CoffeeLdrError::Msg(s!("failed to read file")))?;
+            .map_err(|_| CoffeeLdrError::Msg(obf!("failed to read file").to_string()))?;
         let _ = CloseHandle(h_file);
     }
 

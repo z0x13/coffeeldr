@@ -23,11 +23,9 @@ doctest = false
 
 [dependencies]
 log = "0.4.22"
-obfstr = "0.4.4"
 const-hashes = { path = "../const-hashes" }
 const-encrypt = { path = "../const-encrypt" }
 spin = { version = "0.10.0", default-features = false, features = ["mutex", "spin_mutex"] }
-thiserror = { version = "2.0.12", default-features = false }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 printf-compat = { version = "0.3", default-features = false }
 

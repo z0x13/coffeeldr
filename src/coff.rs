@@ -6,6 +6,7 @@ use alloc::{
 };
 use core::ffi::c_void;
 
+use const_encrypt::obf;
 use log::{debug, warn};
 
 use crate::error::{CoffError, CoffeeLdrError};
@@ -171,7 +172,7 @@ impl<'a> Coff<'a> {
                         return;
                     };
                     let name = self.get_symbol_name(sym);
-                    if name.starts_with("__imp_") {
+                    if name.starts_with(&obf!("__imp_").to_string()) {
                         total_length += size_of::<*const c_void>();
                     }
                 });
@@ -281,16 +282,16 @@ impl CoffMachine {
             CoffMachine::X32 => {
                 if cfg!(target_pointer_width = "64") {
                     return Err(CoffeeLdrError::ArchitectureMismatch {
-                        expected: "x32",
-                        actual: "x64",
+                        expected: 32,
+                        actual: 64,
                     });
                 }
             }
             CoffMachine::X64 => {
                 if cfg!(target_pointer_width = "32") {
                     return Err(CoffeeLdrError::ArchitectureMismatch {
-                        expected: "x64",
-                        actual: "x32",
+                        expected: 64,
+                        actual: 32,
                     });
                 }
             }
