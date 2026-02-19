@@ -242,20 +242,41 @@ impl<'a> CoffeeLdr<'a> {
 
 impl Drop for CoffeeLdr<'_> {
     fn drop(&mut self) {
-        // When stomping, memory belongs to another module and must not be freed
         if !self.module.is_empty() {
             return;
         }
 
         for section in self.section_map.iter_mut() {
-            if !section.base.is_null() {
-                let _ = unsafe { dinvoke::kernel32::VirtualFree(section.base, 0, MEM_RELEASE) };
+            if !section.base.is_null() && section.size > 0 {
+                unsafe {
+                    let mut old = PAGE_READWRITE;
+                    let _ = dinvoke::kernel32::VirtualProtect(
+                        section.base,
+                        section.size,
+                        PAGE_READWRITE,
+                        &mut old,
+                    );
+                    volatile_set_memory(section.base as *mut u8, 0, section.size);
+                }
+            }
+        }
+
+        if let Some(first) = self.section_map.first() {
+            if !first.base.is_null() {
+                let _ = unsafe { dinvoke::kernel32::VirtualFree(first.base, 0, MEM_RELEASE) };
             }
         }
 
         if !self.symbols.address.is_null() {
-            let _ =
-                unsafe { dinvoke::kernel32::VirtualFree(*self.symbols.address, 0, MEM_RELEASE) };
+            unsafe {
+                let size = MAX_SYMBOLS * size_of::<*mut c_void>();
+                volatile_set_memory(self.symbols.address as *mut u8, 0, size);
+                let _ = dinvoke::kernel32::VirtualFree(
+                    self.symbols.address as *mut c_void,
+                    0,
+                    MEM_RELEASE,
+                );
+            }
         }
     }
 }
