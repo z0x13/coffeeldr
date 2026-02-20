@@ -35,7 +35,8 @@ use windows::Win32::{
             PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY, VIRTUAL_ALLOCATION_TYPE,
         },
         SystemServices::{
-            IMAGE_REL_AMD64_REL32, IMAGE_REL_AMD64_REL32_5, IMAGE_REL_I386_DIR32,
+            IMAGE_REL_AMD64_ADDR32NB, IMAGE_REL_AMD64_ADDR64, IMAGE_REL_AMD64_REL32,
+            IMAGE_REL_AMD64_REL32_5, IMAGE_REL_I386_DIR32, IMAGE_REL_I386_REL32,
             IMAGE_SYM_CLASS_EXTERNAL, MEM_TOP_DOWN,
         },
     },
@@ -261,10 +262,10 @@ impl Drop for CoffeeLdr<'_> {
             }
         }
 
-        if let Some(first) = self.section_map.first() {
-            if !first.base.is_null() {
-                let _ = unsafe { dinvoke::kernel32::VirtualFree(first.base, 0, MEM_RELEASE) };
-            }
+        if let Some(first) = self.section_map.first()
+            && !first.base.is_null()
+        {
+            let _ = unsafe { dinvoke::kernel32::VirtualFree(first.base, 0, MEM_RELEASE) };
         }
 
         if !self.symbols.address.is_null() {
